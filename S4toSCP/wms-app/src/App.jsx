@@ -1,0 +1,23 @@
+import { Routes, Route, Navigate } from 'react-router-dom'
+import { ToastProvider } from './context/ToastContext'
+import Layout from './components/layout/Layout'
+import Module1 from './pages/Module1'
+import Module2 from './pages/Module2'
+import Module3 from './pages/Module3'
+import Config from './pages/Config'
+
+export default function App() {
+  return (
+    <ToastProvider>
+      <Layout>
+        <Routes>
+          <Route path="/"           element={<Navigate to="/importacao" replace />} />
+          <Route path="/importacao" element={<Module1 />} />
+          <Route path="/recepcao"   element={<Module2 />} />
+          <Route path="/consulta"   element={<Module3 />} />
+          <Route path="/configuracao" element={<Config />} />
+        </Routes>
+      </Layout>
+    </ToastProvider>
+  )
+}
