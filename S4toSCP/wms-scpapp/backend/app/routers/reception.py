@@ -2,7 +2,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Optional
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from app.models.schemas import (
     PackingListSummary, BoxSummary, BoxDetail,
@@ -14,7 +13,11 @@ from app.services.reception_service import (
     get_warehouses, get_locations, confirm_box,
     find_packing_by_barcode
 )
-from app.services.rfid_listener import RFIDListener
+from app.services.rfid_bridge_client import (
+    RfidBridgeClient,
+    RfidBridgeError,
+    TunnelRfidConfig,
+)
 from app.settings import settings
 from app.db.connection import db_cursor
 
@@ -51,9 +54,11 @@ def confirm_box_endpoint(order_id: int, vol_num: int, req: ConfirmBoxRequest):
         raise HTTPException(status_code=400, detail=result.message)
     return result
 
+_bridge_client = RfidBridgeClient(settings.RFID_BRIDGE_URL)
+
 # ── Túneis RFID ───────────────────────────────────────────────────────────────
-# tunnel_id -> {"listener": RFIDListener, "task": Task, "wss": set}
-_tunnels: dict = {}
+# tunnel_id -> {"wss": set, "poller": Task | None, "last_tags": set[str]}
+_tunnels: dict[int, dict] = {}
 
 
 def _load_tunnel_config(tunnel_id: int):
@@ -61,7 +66,8 @@ def _load_tunnel_config(tunnel_id: int):
     with db_cursor() as (cursor, _):
         cursor.execute("""
             SELECT RFID_Host, RFID_Port,
-                   Antenna1_Enabled, Antenna2_Enabled, Antenna3_Enabled, Antenna4_Enabled
+                   Antenna1_Enabled, Antenna2_Enabled, Antenna3_Enabled, Antenna4_Enabled,
+                   Antenna1_TxPower, Antenna2_TxPower, Antenna3_TxPower, Antenna4_TxPower
             FROM RFIDTunnels WHERE TunnelID=? AND Active=1
         """, (tunnel_id,))
         row = cursor.fetchone()
@@ -70,6 +76,11 @@ def _load_tunnel_config(tunnel_id: int):
         host     = row[0]
         port     = row[1]
         antennas = [i+1 for i in range(4) if row[2+i]]
+        tx_power = {i + 1: int(row[6 + i] or 0) for i in range(4)}
+        rx_sensitivity = {
+            i: getattr(settings, f"RFID_ANTENNA{i}_RX_SENSITIVITY", 0)
+            for i in range(1, 5)
+        }
         if not antennas:
             antennas = [2]  # fallback seguro — nunca antena 1 por defeito
     else:
@@ -78,46 +89,104 @@ def _load_tunnel_config(tunnel_id: int):
         port     = settings.RFID_PORT
         antennas = [i for i in range(1, 5)
                     if getattr(settings, f"RFID_ANTENNA{i}_ENABLED", 0) == 1] or [2]
+        tx_power = {i: getattr(settings, f"RFID_ANTENNA{i}_TX_POWER", 0) for i in range(1, 5)}
+        rx_sensitivity = {
+            i: getattr(settings, f"RFID_ANTENNA{i}_RX_SENSITIVITY", 0)
+            for i in range(1, 5)
+        }
 
-    return host, port, antennas
+    return host, port, antennas, tx_power, rx_sensitivity
 
 
-async def _get_tunnel_listener(tunnel_id: int):
-    """Obtém ou cria listener para o túnel. Relê config da BD sempre que cria novo."""
-    if tunnel_id not in _tunnels or not _tunnels[tunnel_id]["listener"]._running:
-        host, port, antennas = _load_tunnel_config(tunnel_id)
+def _build_bridge_config(tunnel_id: int) -> TunnelRfidConfig:
+    host, port, antennas, tx_power, rx_sensitivity = _load_tunnel_config(tunnel_id)
+    return TunnelRfidConfig(
+        host=host,
+        port=port,
+        antennas=antennas,
+        tx_powers={ant: int(tx_power.get(ant, 0) or 0) for ant in antennas},
+        rx_sensitivity={ant: int(rx_sensitivity.get(ant, 0) or 0) for ant in antennas},
+    )
 
-        wss: set = set()
 
-        async def broadcast(current_tags: set):
-            msg = json.dumps({"type": "tags", "count": len(current_tags), "tags": list(current_tags)})
-            dead = set()
-            for ws in wss:
-                try:
-                    await ws.send_text(msg)
-                except Exception:
-                    dead.add(ws)
-            wss.difference_update(dead)
+async def _broadcast_tunnel_tags(tunnel_id: int, tags: set[str], event_type: str = "tags"):
+    tunnel = _tunnels.get(tunnel_id)
+    if not tunnel:
+        return
 
-        listener = RFIDListener(host=host, port=port, on_update=broadcast, antennas=antennas)
-        task     = asyncio.create_task(listener.start())
-        logger.info(f"Túnel {tunnel_id}: {host}:{port} antenas={antennas}")
-        _tunnels[tunnel_id] = {"listener": listener, "task": task, "wss": wss}
+    msg = json.dumps({"type": event_type, "count": len(tags), "tags": sorted(tags)})
+    dead = set()
+    for ws in tunnel["wss"]:
+        try:
+            await ws.send_text(msg)
+        except Exception:
+            dead.add(ws)
+    tunnel["wss"].difference_update(dead)
 
-    return _tunnels[tunnel_id]["listener"], _tunnels[tunnel_id]["wss"]
+
+async def _poll_bridge_tags(tunnel_id: int):
+    try:
+        while True:
+            tunnel = _tunnels.get(tunnel_id)
+            if not tunnel or not tunnel["wss"]:
+                return
+
+            snapshot = await asyncio.to_thread(_bridge_client.get_tags)
+            tags = {
+                str(tag.get("epc", "")).strip()
+                for tag in snapshot.get("tags", [])
+                if str(tag.get("epc", "")).strip()
+            }
+            if tags != tunnel["last_tags"]:
+                tunnel["last_tags"] = tags
+                await _broadcast_tunnel_tags(tunnel_id, tags)
+
+            await asyncio.sleep(0.5)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("Erro a fazer polling RFID bridge para o túnel %s", tunnel_id)
+
+
+def _ensure_tunnel_state(tunnel_id: int) -> dict:
+    tunnel = _tunnels.get(tunnel_id)
+    if tunnel is None:
+        tunnel = {"wss": set(), "poller": None, "last_tags": set()}
+        _tunnels[tunnel_id] = tunnel
+    return tunnel
+
+
+async def _ensure_tunnel_poller(tunnel_id: int):
+    tunnel = _ensure_tunnel_state(tunnel_id)
+    poller = tunnel.get("poller")
+    if poller is None or poller.done():
+        tunnel["poller"] = asyncio.create_task(_poll_bridge_tags(tunnel_id))
 
 
 @router.websocket("/ws/rfid")
 async def rfid_websocket(websocket: WebSocket, tunnel_id: int = 1):
     await websocket.accept()
-    listener, wss = await _get_tunnel_listener(tunnel_id)
-    wss.add(websocket)
+    tunnel = _ensure_tunnel_state(tunnel_id)
+    tunnel["wss"].add(websocket)
 
-    # Envia estado inicial — frontend sabe que está pronto
+    try:
+        snapshot = await asyncio.to_thread(_bridge_client.get_tags)
+    except RfidBridgeError as exc:
+        tunnel["wss"].discard(websocket)
+        await websocket.close(code=1011, reason=str(exc)[:120])
+        return
+
+    tags = {
+        str(tag.get("epc", "")).strip()
+        for tag in snapshot.get("tags", [])
+        if str(tag.get("epc", "")).strip()
+    }
+    tunnel["last_tags"] = tags
+    await _ensure_tunnel_poller(tunnel_id)
     await websocket.send_text(json.dumps({
-        "type":  "ready",
-        "count": len(listener.get_tags()),
-        "tags":  list(listener.get_tags()),
+        "type": "ready",
+        "count": len(tags),
+        "tags": sorted(tags),
     }))
 
     try:
@@ -127,31 +196,45 @@ async def rfid_websocket(websocket: WebSocket, tunnel_id: int = 1):
             action = data.get("action")
 
             if action in ("start", "reset"):
-                # "start" = operador carregou Nova Leitura
-                # "reset" = mesma acção, nome alternativo
-                await listener.reset()
-                # Notifica todos os WebSockets do mesmo túnel
-                dead = set()
-                for ws in wss:
-                    try:
-                        await ws.send_text(json.dumps({"type": "reset", "count": 0, "tags": []}))
-                    except Exception:
-                        dead.add(ws)
-                wss.difference_update(dead)
+                config = _build_bridge_config(tunnel_id)
+                logger.info(
+                    "Túnel %s: bridge RFID %s:%s antenas=%s tx=%s rx=%s",
+                    tunnel_id,
+                    config.host,
+                    config.port,
+                    config.antennas,
+                    config.tx_powers,
+                    config.rx_sensitivity,
+                )
+                if action == "start":
+                    await asyncio.to_thread(_bridge_client.start, config)
+                else:
+                    await asyncio.to_thread(_bridge_client.reset, config)
+                tunnel["last_tags"] = set()
+                await _ensure_tunnel_poller(tunnel_id)
+                await _broadcast_tunnel_tags(tunnel_id, set(), "reset")
 
             elif action == "stop":
-                # Operador validou caixa — para leitura activa
-                await listener.stop()
-                # Recria listener para o próximo ciclo
-                del _tunnels[tunnel_id]
-
+                await asyncio.to_thread(_bridge_client.stop)
             elif action == "set_delay":
-                listener.set_restart_delay(float(data.get("delay", 3.0)))
+                logger.info("RFID bridge ignora set_delay para o túnel %s", tunnel_id)
 
     except WebSocketDisconnect:
         pass
+    except RfidBridgeError as exc:
+        logger.exception("Erro RFID bridge no túnel %s", tunnel_id)
+        await websocket.send_text(json.dumps({"type": "error", "detail": str(exc)}))
     finally:
-        wss.discard(websocket)
+        tunnel["wss"].discard(websocket)
+        if not tunnel["wss"] and tunnel_id in _tunnels:
+            poller = tunnel.get("poller")
+            if poller and not poller.done():
+                poller.cancel()
+                try:
+                    await poller
+                except asyncio.CancelledError:
+                    pass
+            _tunnels.pop(tunnel_id, None)
 
 
 @router.get("/packing/by-barcode/{barcode}")

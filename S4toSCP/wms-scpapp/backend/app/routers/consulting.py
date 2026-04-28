@@ -36,7 +36,8 @@ def list_packings(
                 COUNT(vm.VolNum)                                    AS total_boxes,
                 SUM(CASE WHEN vm.VolVerified=1 THEN 1 ELSE 0 END)  AS confirmed_boxes,
                 SUM(ISNULL(vi_ini.ItemQtyIni, 0))                  AS qty_initial,
-                SUM(ISNULL(vi_conf.ItemQty,   0))                  AS qty_confirmed
+                SUM(ISNULL(vi_conf.ItemQty,   0))                  AS qty_confirmed,
+                ISNULL(stock.qty_stock, 0)                        AS qty_stock
             FROM ClientOrders co
             LEFT JOIN VolMaster vm
                 ON vm.ParentOrderID = co.OrderID AND vm.VolDocCod = 'CX'
@@ -48,8 +49,19 @@ def list_packings(
                 SELECT VolNum, SUM(ItemQty) AS ItemQty
                 FROM VolItem WHERE ItemQty > 0 GROUP BY VolNum
             ) vi_conf ON vi_conf.VolNum = vm.VolNum
+            OUTER APPLY (
+                SELECT SUM(i.Qty) AS qty_stock
+                FROM Inventory i
+                WHERE EXISTS (
+                    SELECT 1
+                    FROM ClientOrderDetails cod
+                    WHERE cod.OrderID = co.OrderID
+                      AND cod.DocType = co.DocType
+                      AND cod.ItemID = i.ItemID
+                )
+            ) stock
             WHERE co.DocType = ?
-            GROUP BY co.OrderID, co.DocType, co.ClientID, co.OrderDateTime, co.Obs, co.RequesterID
+            GROUP BY co.OrderID, co.DocType, co.ClientID, co.OrderDateTime, co.Obs, co.RequesterID, stock.qty_stock
             ORDER BY co.OrderID DESC
         """, (doc_type,))
         rows = cursor.fetchall()
@@ -57,20 +69,10 @@ def list_packings(
     result = []
     for r in rows:
         order_id, dtype, client_id, order_date, obs, requester_id, \
-            total, confirmed, qty_ini, qty_conf = r
+            total, confirmed, qty_ini, qty_conf, qty_stock = r
         st = _packing_status(total or 0, confirmed or 0)
         if status != "TODOS" and st != status:
             continue
-
-        with db_cursor() as (c2, _):
-            c2.execute("""
-                SELECT ISNULL(SUM(i.Qty), 0)
-                FROM Inventory i
-                JOIN VolItem vi ON vi.ItemID = i.ItemID
-                JOIN VolMaster vm ON vm.VolNum = vi.VolNum
-                WHERE vm.ParentOrderID = ?
-            """, (order_id,))
-            qty_stock = c2.fetchone()[0] or 0
 
         result.append({
             "order_id":        order_id,

@@ -105,6 +105,7 @@ class BoxSummary(BaseModel):
     status:       str   # pendente | parcial | conferida | incidencia
     total_items:  int
     qty_expected: int
+    qty_received: int = 0
 
 
 class BoxItem(BaseModel):
@@ -143,6 +144,7 @@ class ConfirmBoxRequest(BaseModel):
     item_quantities:  dict[str, int]   # {item_id: qty_read}
     escp_order_id:    Optional[int] = None
     rfid_tags:        list[str] = []   # TAGs RFID lidas neste ciclo
+    item_tags:        dict[str, list[str]] = {}  # {item_id: [epc1, epc2]}
 
 
 class ConfirmBoxResult(BaseModel):

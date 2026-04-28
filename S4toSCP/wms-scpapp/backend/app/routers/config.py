@@ -22,6 +22,21 @@ class RFIDConfig(BaseModel):
     antennas: list[AntennaConfig]
 
 
+class TunnelAntennaConfig(BaseModel):
+    antenna: int
+    enabled: bool
+    tx_power: int
+    rx_sensitivity: int = 0
+
+
+class TunnelRFIDConfig(BaseModel):
+    tunnel_id: int
+    host: str
+    port: int
+    antennas: list[TunnelAntennaConfig]
+    active: bool = True
+
+
 def _read_env() -> dict:
     """Lê o .env como dicionário."""
     env = {}
@@ -120,4 +135,85 @@ def list_tunnels():
         "host": r[3], "port": r[4],
         "antennas": [i+1 for i in range(4) if r[5+i]],
         "tx_powers": [r[9], r[10], r[11], r[12]],
+        "rx_sensitivity": [0, 0, 0, 0],
+        "active": bool(r[13]),
     } for r in rows]
+
+
+@router.get("/tunnels/{tunnel_id}/rfid", response_model=TunnelRFIDConfig)
+def get_tunnel_rfid_config(tunnel_id: int):
+    with _db_cursor() as (cursor, _):
+        cursor.execute("""
+            SELECT TunnelID, RFID_Host, RFID_Port,
+                   Antenna1_Enabled, Antenna2_Enabled, Antenna3_Enabled, Antenna4_Enabled,
+                   Antenna1_TxPower, Antenna2_TxPower, Antenna3_TxPower, Antenna4_TxPower,
+                   Active
+            FROM RFIDTunnels
+            WHERE TunnelID=?
+        """, (tunnel_id,))
+        row = cursor.fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Túnel RFID {tunnel_id} não encontrado")
+
+    antennas = [
+        TunnelAntennaConfig(
+            antenna=i + 1,
+            enabled=bool(row[3 + i]),
+            tx_power=int(row[7 + i] or 0),
+            rx_sensitivity=0,
+        )
+        for i in range(4)
+    ]
+    return TunnelRFIDConfig(
+        tunnel_id=row[0],
+        host=row[1],
+        port=int(row[2]),
+        antennas=antennas,
+        active=bool(row[11]),
+    )
+
+
+@router.put("/tunnels/{tunnel_id}/rfid", response_model=TunnelRFIDConfig)
+def save_tunnel_rfid_config(tunnel_id: int, cfg: TunnelRFIDConfig):
+    if cfg.tunnel_id != tunnel_id:
+        raise HTTPException(status_code=400, detail="O tunnel_id do path e do body têm de coincidir")
+
+    antennas = {antenna.antenna: antenna for antenna in cfg.antennas}
+    missing = [str(antenna) for antenna in range(1, 5) if antenna not in antennas]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Faltam configurações para as antenas: {', '.join(missing)}",
+        )
+
+    with _db_cursor() as (cursor, conn):
+        cursor.execute("SELECT 1 FROM RFIDTunnels WHERE TunnelID=?", (tunnel_id,))
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail=f"Túnel RFID {tunnel_id} não encontrado")
+
+        cursor.execute("""
+            UPDATE RFIDTunnels
+            SET RFID_Host=?,
+                RFID_Port=?,
+                Antenna1_Enabled=?, Antenna2_Enabled=?, Antenna3_Enabled=?, Antenna4_Enabled=?,
+                Antenna1_TxPower=?, Antenna2_TxPower=?, Antenna3_TxPower=?, Antenna4_TxPower=?,
+                Active=?
+            WHERE TunnelID=?
+        """, (
+            cfg.host,
+            cfg.port,
+            1 if antennas[1].enabled else 0,
+            1 if antennas[2].enabled else 0,
+            1 if antennas[3].enabled else 0,
+            1 if antennas[4].enabled else 0,
+            antennas[1].tx_power,
+            antennas[2].tx_power,
+            antennas[3].tx_power,
+            antennas[4].tx_power,
+            1 if cfg.active else 0,
+            tunnel_id,
+        ))
+        conn.commit()
+
+    return get_tunnel_rfid_config(tunnel_id)

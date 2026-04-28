@@ -67,7 +67,8 @@ def get_boxes(order_id: int) -> list[BoxSummary]:
                 v.VolVerified,
                 v.VolStatus,
                 COUNT(vi.VolItemNumber)                             AS TotalItems,
-                ISNULL(SUM(vi.ItemQty), 0)                         AS QtyExpected,
+                ISNULL(SUM(vi.ItemQtyIni), 0)                      AS QtyExpected,
+                ISNULL(SUM(vi.ItemQty), 0)                         AS QtyReceived,
                 v.VolReady
             FROM VolMaster v
             LEFT JOIN VolItem vi ON vi.VolNum = v.VolNum AND vi.VolDocCod = 'CX'
@@ -97,6 +98,7 @@ def get_boxes(order_id: int) -> list[BoxSummary]:
             status       = box_status,
             total_items  = r[4] or 0,
             qty_expected = int(r[5] or 0),
+            qty_received = int(r[6] or 0),
         ))
     return result
 
@@ -114,12 +116,8 @@ def get_box_detail(vol_num: int):
         if not row:
             return None
 
-        # Se a caixa já está verificada, ItemQty = qty_read
-        # qty_expected vem do ClientOrderDetails
         verified = bool(row[2])
 
-        # Busca qtd esperada do packing (VolItem antes de conferência)
-        # e qtd lida (ItemQty após confirmação quando VolVerified=1)
         cursor.execute("""
             SELECT
                 vi.VolItemNumber,
@@ -142,8 +140,8 @@ def get_box_detail(vol_num: int):
             vol_item_number = i[0],
             item_id         = i[1],
             item_desc       = i[6] or '',
-            qty_expected    = int(i[7] or i[2] or 0),  # ItemQtyIni se verificada, senão ItemQty
-            qty_read        = int(i[2] or 0) if verified else 0,   # ItemQty = qtd lida após confirmação
+            qty_expected    = int(i[7] or 0),
+            qty_read        = int(i[2] or 0) if verified else 0,
             color_id        = i[3] or '',
             size_id         = i[4] or '',
             country         = i[5] or '',
@@ -187,7 +185,7 @@ def confirm_box(vol_num: int, req: ConfirmBoxRequest) -> ConfirmBoxResult:
 
         # Busca items da caixa
         cursor.execute("""
-            SELECT vi.VolItemNumber, vi.ItemID, vi.ItemQty,
+            SELECT vi.VolItemNumber, vi.ItemID, vi.ItemQty, vi.ItemQtyIni,
                    vi.ColorID, vi.SizeId, vi.VariationCountry,
                    v.ParentOrderID
             FROM VolItem vi
@@ -199,27 +197,25 @@ def confirm_box(vol_num: int, req: ConfirmBoxRequest) -> ConfirmBoxResult:
         if not items:
             return ConfirmBoxResult(success=False, message="Caixa não encontrada")
 
-        order_id     = items[0][6]
+        order_id     = items[0][7]
         has_incident = False
 
         for item in items:
             item_num  = item[0]
             item_id   = item[1]
-            qty_exp   = int(item[2] or 0)
-            color_id  = item[3] or ''
-            size_id   = item[4] or ''
-            country   = item[5] or ''
+            qty_exp   = int(item[3] or 0)
+            color_id  = item[4] or ''
+            size_id   = item[5] or ''
+            country   = item[6] or ''
 
             # Qty lida para este artigo
             qty_read = req.item_quantities.get(item_id, 0)
-            if qty_read < qty_exp:
+            if qty_read != qty_exp:
                 has_incident = True
 
-            # Guarda qtd original em ItemQtyIni e qtd lida em ItemQtyIni
             cursor.execute("""
                 UPDATE VolItem
-                SET ItemQtyIni = ItemQty,
-                    ItemQty    = ?
+                SET ItemQty = ?
                 WHERE VolNum = ? AND VolItemNumber = ? AND VolDocCod = 'CX'
             """, (qty_read, vol_num, item_num))
 
@@ -252,17 +248,21 @@ def confirm_box(vol_num: int, req: ConfirmBoxRequest) -> ConfirmBoxResult:
                         ?, ?, ?,
                         '', '', ?,
                         GETDATE(), 0, ?,
-                        '', '', ''
+                        ?, ?, ?
                     )
                 """, (req.wh_id, req.location_id, item_id,
-                      qty_read, str(vol_num)))
+                      qty_read, str(vol_num), color_id, size_id, country))
 
-        # Guarda TAGs RFID na tabela ItemMasterRFIDTags
-        if req.rfid_tags:
-            for item in items:
-                item_id = item[1]
-                for tag in req.rfid_tags:
-                    # Verifica se a tag já existe
+        item_tags_map = {
+            item_id: [tag for tag in tags if tag]
+            for item_id, tags in (req.item_tags or {}).items()
+        }
+        if not item_tags_map and req.rfid_tags and len(items) == 1:
+            item_tags_map[items[0][1]] = [tag for tag in req.rfid_tags if tag]
+
+        if item_tags_map:
+            for item_id, tags in item_tags_map.items():
+                for tag in tags:
                     cursor.execute("""
                         IF NOT EXISTS (SELECT 1 FROM ItemMasterRFIDTags WHERE TAG = ?)
                         INSERT INTO ItemMasterRFIDTags (
@@ -285,7 +285,7 @@ def confirm_box(vol_num: int, req: ConfirmBoxRequest) -> ConfirmBoxResult:
         # Atualiza ClientOrderDetails PSCP com qtd recebida por artigo
         for item in items:
             item_id  = item[1]
-            country  = item[5] or ''
+            country  = item[6] or ''
             qty_read = req.item_quantities.get(item_id, 0)
             cursor.execute("""
                 UPDATE ClientOrderDetails

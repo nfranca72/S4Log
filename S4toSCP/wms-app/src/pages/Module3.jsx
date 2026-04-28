@@ -40,12 +40,14 @@ function ViewByArticle({ selected }) {
   const [selLine,   setSelLine]   = useState(null)
   const [stock,     setStock]     = useState([])
   const [selBox,    setSelBox]    = useState('')
+  const [boxes,     setBoxes]     = useState([])
   const [movements, setMovements] = useState([])
 
   useEffect(() => {
     if (!selected) return
-    setLines([]); setSelLine(null); setStock([]); setMovements([])
+    setLines([]); setSelLine(null); setStock([]); setBoxes([]); setMovements([]); setSelBox('')
     api.get(`/consulting/packings/${selected.order_id}/lines?doc_type=${selected.doc_type}`).then(d => setLines(d || []))
+    api.get(`/consulting/packings/${selected.order_id}/boxes?doc_type=${selected.doc_type}`).then(d => setBoxes(d || []))
   }, [selected])
 
   const selectLine = async (line) => {
@@ -120,8 +122,10 @@ function ViewByArticle({ selected }) {
           <select className={styles.boxSelect} value={selBox}
             onChange={e => loadMovements(e.target.value)}>
             <option value="">Selecciona caixa...</option>
-            {Array.from({ length: selected.total_boxes }, (_, i) => i + 1).map(n => (
-              <option key={n} value={n}>Caixa {n}</option>
+            {boxes.map(box => (
+              <option key={box.vol_num} value={box.vol_num}>
+                Caixa {box.vol_num}{box.barcode ? ` - ${box.barcode}` : ''}
+              </option>
             ))}
           </select>
         </div>

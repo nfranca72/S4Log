@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     RFID_ANTENNA2_ENABLED: int = 0
     RFID_ANTENNA3_ENABLED: int = 0
     RFID_ANTENNA4_ENABLED: int = 0
+    RFID_BRIDGE_URL: str = "http://127.0.0.1:8003"
 
     class Config:
         env_file = ".env"

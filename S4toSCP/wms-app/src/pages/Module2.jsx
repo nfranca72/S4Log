@@ -12,6 +12,11 @@ function statusInfo(s) {
   return                          { label: 'Pendente',       color: 'var(--text3)',  bg: 'transparent' }
 }
 
+function tunnelLabel(tunnel, index) {
+  const base = String.fromCharCode(65 + index)
+  return tunnel?.tunnel_code ? `${base} - ${tunnel.tunnel_code}` : base
+}
+
 export default function Module2() {
   const toast = useToast()
 
@@ -37,6 +42,7 @@ export default function Module2() {
   // ── Conference ────────────────────────────────────────────────────────────
   const [activeItem, setActiveItem] = useState(null)
   const [itemQtys, setItemQtys]     = useState({})
+  const [itemTags, setItemTags]     = useState({})
   const [confirming, setConfirming] = useState(false)
   const [testMode, setTestMode]     = useState(false)
   const [manualQty, setManualQty]   = useState('')
@@ -99,6 +105,7 @@ export default function Module2() {
     setActiveBox(null)
     setActiveItem(null)
     setItemQtys({})
+    setItemTags({})
 
     try {
       const detail = await fetch(`${API}/packing/${orderId}/boxes/${volNum}`).then(r => r.json())
@@ -146,7 +153,6 @@ export default function Module2() {
     const wsBase = (import.meta.env.VITE_API_URL ?? 'http://localhost:8000').replace(/^http/, 'ws')
     const ws = new WebSocket(`${wsBase}/ws/rfid?tunnel_id=${tunnelId ?? selectedTunnel}`)
     ws.onopen = () => {
-      console.log('RFID WebSocket ligado')
       setRfidStatus('idle')
     }
     ws.onmessage = e => {
@@ -229,6 +235,15 @@ export default function Module2() {
     if (!activeItem) return
     const qty = currentQty
     setItemQtys(prev => ({ ...prev, [activeItem.item_id]: qty }))
+    setItemTags(prev => ({
+      ...prev,
+      [activeItem.item_id]: testMode ? [] : [...rfidTagsRef.current],
+    }))
+    setRfidActive(false)
+    setRfidStatus('idle')
+    setRfidCount(0)
+    setManualQty('')
+    rfidTagsRef.current = []
 
     const remaining = activeBox.items.filter(
       i => i.item_id !== activeItem.item_id && !(i.item_id in itemQtys)
@@ -252,6 +267,10 @@ export default function Module2() {
     setConfirming(true)
     const finalQtys = { ...itemQtys }
     if (activeItem) finalQtys[activeItem.item_id] = currentQty
+    const finalItemTags = { ...itemTags }
+    if (activeItem && !testMode) {
+      finalItemTags[activeItem.item_id] = [...rfidTagsRef.current]
+    }
 
     try {
       const res = await fetch(
@@ -259,7 +278,14 @@ export default function Module2() {
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ wh_id: parseInt(whId), location_id: locationId, item_quantities: finalQtys, escp_order_id: packing?.escp_order_id || null, rfid_tags: rfidTagsRef.current }),
+          body: JSON.stringify({
+            wh_id: parseInt(whId),
+            location_id: locationId,
+            item_quantities: finalQtys,
+            escp_order_id: packing?.escp_order_id || null,
+            rfid_tags: rfidTagsRef.current,
+            item_tags: finalItemTags,
+          }),
         }
       ).then(r => r.json())
 
@@ -272,6 +298,7 @@ export default function Module2() {
       setActiveBox(null)
       setActiveItem(null)
       setItemQtys({})
+      setItemTags({})
       setRfidCount(0)
 
     } catch { toast('Erro ao confirmar caixa', 'error') }
@@ -286,6 +313,7 @@ export default function Module2() {
     setActiveBox(null)
     setActiveItem(null)
     setItemQtys({})
+    setItemTags({})
     setScanInput('')
     setTimeout(() => scanInputRef.current?.focus(), 100)
   }
@@ -294,7 +322,7 @@ export default function Module2() {
   const verifiedBoxes = boxes.filter(b => b.status === 'conferida' || b.status === 'incidencia').length
   const totalQtyReceived = boxes
     .filter(b => b.status === 'conferida' || b.status === 'incidencia')
-    .reduce((s, b) => s + b.qty_expected, 0)
+    .reduce((s, b) => s + (b.qty_received || 0), 0)
   const isFullyDone = boxes.length > 0 && verifiedBoxes === boxes.length
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -567,28 +595,19 @@ export default function Module2() {
 
                         <div className={styles.rfidActions}>
                           {tunnels.length > 1 && (
-                          <select
-                            value={selectedTunnel}
-                            onChange={e => setSelectedTunnel(parseInt(e.target.value))}
-                            style={{padding:'6px 10px',border:'1px solid var(--border)',borderRadius:'6px',background:'var(--bg)',color:'var(--text1)',fontSize:'13px'}}
-                          >
-                            {tunnels.map(t => (
-                              <option key={t.tunnel_id} value={t.tunnel_id}>{t.tunnel_desc}</option>
-                            ))}
-                          </select>
-                        )}
-                        <div style={{display:'flex',alignItems:'center',gap:'8px',flexWrap:'wrap'}}>
-                          {tunnels.length > 1 && (
                             <select
                               value={selectedTunnel}
                               onChange={e => setSelectedTunnel(parseInt(e.target.value))}
                               style={{padding:'6px 10px',border:'1px solid var(--border)',borderRadius:'6px',background:'var(--bg)',color:'var(--text1)',fontSize:'13px'}}
                             >
-                              {tunnels.map(t => (
-                                <option key={t.tunnel_id} value={t.tunnel_id}>{t.tunnel_desc}</option>
+                              {tunnels.map((t, index) => (
+                                <option key={t.tunnel_id} value={t.tunnel_id}>
+                                  {tunnelLabel(t, index)}
+                                </option>
                               ))}
                             </select>
                           )}
+                        <div style={{display:'flex',alignItems:'center',gap:'8px',flexWrap:'wrap'}}>
                           <Btn variant="outline" onClick={hardResetRfid}>▶ Nova leitura</Btn>
                           <span style={{
                             fontSize:'12px', fontWeight:500,

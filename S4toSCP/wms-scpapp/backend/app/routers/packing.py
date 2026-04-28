@@ -2,7 +2,7 @@ from __future__ import annotations
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from app.models.schemas import CSVPreview, PackingCreateRequest, ImportResult
 from app.services.csv_parser import parse_csv
-from app.services.item_creator import check_items_exist, create_items
+from app.services.item_creator import check_items_exist
 from app.services.packing_creator import create_packing
 from app.services.packing_resolver import resolve_item_ids
 
@@ -69,12 +69,13 @@ async def import_packing(request: PackingCreateRequest):
             request.client_id = row[0]
 
     resolved_rows, errors = resolve_item_ids(request.escp_order_id, request.csv_rows)
+    original_row_count = len(request.csv_rows)
     # Filtra só linhas resolvidas — importa o que consegue, avisa o resto
     request.csv_rows = [r for r in resolved_rows if r.item_id]
     import_warnings = errors
 
     items_created = 0
-    items_skipped = len({r.item_id for r in request.csv_rows})
+    items_skipped = original_row_count - len(request.csv_rows)
 
     packing = create_packing(
         client_id=request.client_id,

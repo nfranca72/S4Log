@@ -225,37 +225,73 @@ def create_packing(
 
         # ── 4. ClientOrderDetailsOri — liga PSCP à ESCP ──────────────────────
         if escp_order_id:
-            # Para cada linha do PSCP, encontra a linha ESCP com menor OrderRow
-            # que tem o mesmo ItemID
             cursor.execute("""
-                SELECT p.OrderRow, p.ItemID, e.OrderID, e.OrderRow
-                FROM ClientOrderDetails p
-                JOIN (
-                    SELECT ItemID, OrderID, OrderRow,
-                           ROW_NUMBER() OVER (PARTITION BY ItemID ORDER BY OrderRow ASC) AS rn
-                    FROM ClientOrderDetails
-                    WHERE DocType = 'ESCP' AND OrderID = ?
-                ) e ON e.ItemID = p.ItemID AND e.rn = 1
-                WHERE p.OrderID = ? AND p.DocType = 'PSCP'
-            """, (escp_order_id, order_id))
-            ori_rows = cursor.fetchall()
+                SELECT OrderRow, ItemID, VariationCountry, QtyOrd
+                FROM ClientOrderDetails
+                WHERE OrderID = ? AND DocType = 'PSCP'
+                ORDER BY OrderRow
+            """, (order_id,))
+            pscp_rows = cursor.fetchall()
 
-            for pscp_row, item_id, escp_oid, escp_row in ori_rows:
-                cursor.execute("""
-                    IF NOT EXISTS (
-                        SELECT 1 FROM ClientOrderDetailsOri
-                        WHERE DocType='PSCP' AND OrderID=? AND OrderRow=?
-                    )
-                    INSERT INTO ClientOrderDetailsOri (
-                        DocType, OrderID, OrderRow, PartNum, VolNum,
-                        DocTypeOri, OrderIDOri, OrderRowOri, PartNumOri, VolNumOri,
-                        QtyOrd, QtyVols, QtyOrdDest
-                    ) VALUES (
-                        'PSCP', ?, ?, 0, 0,
-                        'ESCP', ?, ?, 0, 0,
-                        0, 0, 0
-                    )
-                """, (order_id, pscp_row, order_id, pscp_row, escp_oid, escp_row))
+            cursor.execute("""
+                SELECT OrderRow, ItemID, QtyOrd
+                FROM ClientOrderDetails
+                WHERE DocType = 'ESCP' AND OrderID = ?
+                ORDER BY ItemID, OrderRow
+            """, (escp_order_id,))
+            escp_rows = cursor.fetchall()
+
+            escp_map: dict[str, list[dict]] = {}
+            for escp_row, item_id, qty_ord in escp_rows:
+                escp_map.setdefault(item_id, []).append({
+                    "order_row": escp_row,
+                    "qty_ord": int(qty_ord or 0),
+                    "allocated": 0,
+                })
+
+            for pscp_row, item_id, _country, qty_ord in pscp_rows:
+                qty_remaining = int(qty_ord or 0)
+                matches = escp_map.get(item_id, [])
+                if not matches:
+                    continue
+
+                for idx, match in enumerate(matches):
+                    is_last = idx == len(matches) - 1
+                    available = max(0, match["qty_ord"] - match["allocated"])
+                    if available <= 0 and not is_last:
+                        continue
+
+                    qty_linked = qty_remaining if is_last else min(qty_remaining, available)
+                    if qty_linked <= 0:
+                        continue
+
+                    match["allocated"] += qty_linked
+                    qty_remaining -= qty_linked
+
+                    cursor.execute("""
+                        IF NOT EXISTS (
+                            SELECT 1
+                            FROM ClientOrderDetailsOri
+                            WHERE DocType='PSCP' AND OrderID=? AND OrderRow=?
+                              AND DocTypeOri='ESCP' AND OrderIDOri=? AND OrderRowOri=?
+                        )
+                        INSERT INTO ClientOrderDetailsOri (
+                            DocType, OrderID, OrderRow, PartNum, VolNum,
+                            DocTypeOri, OrderIDOri, OrderRowOri, PartNumOri, VolNumOri,
+                            QtyOrd, QtyVols, QtyOrdDest
+                        ) VALUES (
+                            'PSCP', ?, ?, 0, 0,
+                            'ESCP', ?, ?, 0, 0,
+                            ?, 0, ?
+                        )
+                    """, (
+                        order_id, pscp_row, escp_order_id, match["order_row"],
+                        order_id, pscp_row, escp_order_id, match["order_row"],
+                        qty_linked, qty_linked,
+                    ))
+
+                    if qty_remaining <= 0:
+                        break
 
         # ── 5. Validação final ─────────────────────────────────────────────────
         created_qty = sum(info["qty"] for info in detail_map.values())
