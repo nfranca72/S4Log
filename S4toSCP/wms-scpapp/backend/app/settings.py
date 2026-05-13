@@ -6,6 +6,8 @@ class Settings(BaseSettings):
     DB_USER: str
     DB_PASSWORD: str
     DB_DRIVER: str = "ODBC Driver 17 for SQL Server"
+    DB_ENCRYPT: str = "no"
+    DB_TRUST_SERVER_CERTIFICATE: str = "yes"
     API_HOST: str = "0.0.0.0"
     API_PORT: int = 8000
 
@@ -16,6 +18,7 @@ class Settings(BaseSettings):
 
     ZEBRA_PRINTER_IP: str = "0.0.0.0"
     ZEBRA_PRINTER_PORT: int = 9100
+    LABEL_TEMPLATE_DIR: str = "label_templates"
 
     RFID_ANTENNA1_TX_POWER: int = 3000
     RFID_ANTENNA2_TX_POWER: int = 3000

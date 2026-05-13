@@ -1,17 +1,23 @@
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 
 from app.models.production_control import (
+    ConsumptionHeader,
     ConsumptionRequest,
     ConsumptionResponse,
     ConsumptionResultLine,
+    ConsumptionWithOriginRequest,
 )
 from app.repositories.production_control import (
     create_local_consumption_document,
     fetch_component_metadata,
     fetch_consumption_context,
     fetch_coonsumption_for_itemmaster_and_bpartner,
+    fetch_production_entrie_status,
+    fetch_production_entries_by_dates,
+    fetch_subcontractor_consumption_context,
 )
 from app.services.sap_service_layer import SapGoodsIssueLine, SapServiceLayerClient
 
@@ -28,6 +34,33 @@ def list_coonsumption_for_itemmaster_and_bpartner(
     )
 
 
+def list_production_entries_by_dates(
+    from_date: date,
+    to_date: date,
+) -> list[dict[str, object]]:
+    if from_date > to_date:
+        raise ValueError("FromDate must be earlier than or equal to ToDate")
+
+    return fetch_production_entries_by_dates(
+        from_date=from_date,
+        to_date=to_date,
+    )
+
+
+def get_production_entrie_status(
+    doc_type: str,
+    order_id: int,
+) -> list[dict[str, object]]:
+    normalized_doc_type = doc_type.strip().upper()
+    if not normalized_doc_type:
+        raise ValueError("DocType is required")
+
+    return fetch_production_entrie_status(
+        doc_type=normalized_doc_type,
+        order_id=order_id,
+    )
+
+
 def create_consumption_order(payload: ConsumptionRequest) -> ConsumptionResponse:
     header = payload.header
 
@@ -37,8 +70,33 @@ def create_consumption_order(payload: ConsumptionRequest) -> ConsumptionResponse
         subcontract_id=header.partner_id,
     )
 
+    return _create_consumption_order_from_context(payload.header, payload.lines, context)
+
+
+def create_consumption_order_with_origin(
+    payload: ConsumptionWithOriginRequest,
+) -> ConsumptionResponse:
+    header = payload.header
+
+    context = fetch_subcontractor_consumption_context(header.partner_id)
+    context.update(
+        {
+            "origin_doc_type": header.origin_doc_type,
+            "origin_order_id": header.origin_order_id,
+            "origin_order_row": header.origin_order_row,
+        }
+    )
+
+    return _create_consumption_order_from_context(payload.header, payload.lines, context)
+
+
+def _create_consumption_order_from_context(
+    header: ConsumptionHeader,
+    lines,
+    context: dict[str, object],
+) -> ConsumptionResponse:
     requested_by_item: dict[str, Decimal] = {}
-    for line in payload.lines:
+    for line in lines:
         item = line.component_id.strip().upper()
         requested_by_item[item] = requested_by_item.get(item, Decimal("0")) + line.qty_consumir
 
@@ -107,12 +165,12 @@ def create_consumption_order(payload: ConsumptionRequest) -> ConsumptionResponse
     ]
 
     local_doc = create_local_consumption_document(
-        partner_id=context["subcontract_partner_id"],
+        partner_id=str(context["subcontract_partner_id"]),
         movement_date=header.movement_date,
-        location_code=context["subcontract_partner_id"],
-        origin_doc_type=context["origin_doc_type"],
-        origin_order_id=context["origin_order_id"],
-        origin_order_row=context["origin_order_row"],
+        location_code=str(context["subcontract_partner_id"]),
+        origin_doc_type=str(context["origin_doc_type"]),
+        origin_order_id=int(context["origin_order_id"]),
+        origin_order_row=int(context["origin_order_row"]),
         sap_doc_type="InventoryGenExit",
         sap_doc_num=int(sap_doc_num) if sap_doc_num is not None else None,
         lines=applied_lines_payload,

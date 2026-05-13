@@ -92,13 +92,6 @@ public sealed class ZebraSdkProvider : IRfidProvider, IAsyncDisposable
         }
 
         var sdkOptions = _options.ZebraSdk;
-        if (string.IsNullOrWhiteSpace(sdkOptions.AssemblyPath))
-        {
-            throw new RfidProviderException(
-                "RfidBridge:ZebraSdk:AssemblyPath is required when Provider=ZebraSdk."
-            );
-        }
-
         if (!OperatingSystem.IsWindows())
         {
             throw new RfidProviderException(
@@ -106,14 +99,88 @@ public sealed class ZebraSdkProvider : IRfidProvider, IAsyncDisposable
             );
         }
 
-        if (!File.Exists(sdkOptions.AssemblyPath))
+        var assemblyPath = ResolveAssemblyPath(sdkOptions.AssemblyPath);
+        if (assemblyPath is null)
         {
             throw new RfidProviderException(
-                $"Zebra Host RFID SDK assembly not found at '{sdkOptions.AssemblyPath}'."
+                "Zebra Host RFID SDK assembly not found. Configure "
+                + "RfidBridge:ZebraSdk:AssemblyPath or place Symbol.RFID3.Host.dll under Utilities\\ZebraSdk."
             );
         }
 
-        _sdkAssembly = Assembly.LoadFrom(sdkOptions.AssemblyPath);
+        _logger.LogInformation("Loading Zebra Host RFID SDK from {AssemblyPath}", assemblyPath);
+        _sdkAssembly = Assembly.LoadFrom(assemblyPath);
+    }
+
+    private static string? ResolveAssemblyPath(string configuredPath)
+    {
+        const string assemblyFileName = "Symbol.RFID3.Host.dll";
+
+        if (!string.IsNullOrWhiteSpace(configuredPath))
+        {
+            var expandedPath = Environment.ExpandEnvironmentVariables(configuredPath.Trim());
+            foreach (var candidate in CandidatePaths(expandedPath))
+            {
+                if (File.Exists(candidate))
+                {
+                    return Path.GetFullPath(candidate);
+                }
+            }
+        }
+
+        foreach (var basePath in AncestorPaths(Directory.GetCurrentDirectory())
+                     .Concat(AncestorPaths(AppContext.BaseDirectory))
+                     .Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var repoCandidate = Path.Combine(basePath, "Utilities", "ZebraSdk", assemblyFileName);
+            if (File.Exists(repoCandidate))
+            {
+                return Path.GetFullPath(repoCandidate);
+            }
+        }
+
+        var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+        if (!string.IsNullOrWhiteSpace(programFiles))
+        {
+            var installedCandidate = Path.Combine(
+                programFiles,
+                "Zebra Technologies",
+                "123RFID Desktop",
+                assemblyFileName
+            );
+            if (File.Exists(installedCandidate))
+            {
+                return Path.GetFullPath(installedCandidate);
+            }
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<string> CandidatePaths(string path)
+    {
+        if (Path.IsPathRooted(path))
+        {
+            yield return path;
+            yield break;
+        }
+
+        foreach (var basePath in AncestorPaths(Directory.GetCurrentDirectory())
+                     .Concat(AncestorPaths(AppContext.BaseDirectory))
+                     .Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            yield return Path.Combine(basePath, path);
+        }
+    }
+
+    private static IEnumerable<string> AncestorPaths(string startPath)
+    {
+        var directory = new DirectoryInfo(startPath);
+        while (directory is not null)
+        {
+            yield return directory.FullName;
+            directory = directory.Parent;
+        }
     }
 
     private async Task EnsureConnectedAsync(RfidStartRequest request, CancellationToken cancellationToken)
@@ -174,7 +241,11 @@ public sealed class ZebraSdkProvider : IRfidProvider, IAsyncDisposable
             return;
         }
 
-        dynamic antennaConfig = configApi.GetAntennaConfig((ushort)antenna);
+        var antennaConfig = TryGetAntennaRfConfig(configApi, antenna);
+        if (antennaConfig is null)
+        {
+            return;
+        }
 
         if (request.TxPowers is not null && request.TxPowers.TryGetValue(antenna.ToString(), out var txPower))
         {
@@ -189,7 +260,55 @@ public sealed class ZebraSdkProvider : IRfidProvider, IAsyncDisposable
             SetPropertyIfExists(antennaConfig, "RxSensitivityIndex", rxSensitivity);
         }
 
-        configApi.SetAntennaConfig((ushort)antenna, antennaConfig);
+        if (TrySetAntennaRfConfig(configApi, antenna, antennaConfig))
+        {
+            return;
+        }
+
+        TryInvokeIfExists(configApi, "SetAntennaConfig", (ushort)antenna, antennaConfig);
+    }
+
+    private static object? TryGetAntennaRfConfig(object antennas, int antenna)
+    {
+        var antennaProperties = GetIndexedProperty(antennas, antenna);
+        if (antennaProperties is not null)
+        {
+            return TryInvoke(antennaProperties, "GetRfConfig")
+                ?? TryInvoke(antennaProperties, "GetConfig");
+        }
+
+        return TryInvoke(antennas, "GetAntennaConfig", (ushort)antenna)
+            ?? TryInvoke(antennas, "GetAntennaConfig", antenna);
+    }
+
+    private static bool TrySetAntennaRfConfig(object antennas, int antenna, object antennaConfig)
+    {
+        var antennaProperties = GetIndexedProperty(antennas, antenna);
+        if (antennaProperties is null)
+        {
+            return false;
+        }
+
+        return TryInvokeVoid(antennaProperties, "SetRfConfig", antennaConfig)
+            || TryInvokeVoid(antennaProperties, "SetConfig", antennaConfig);
+    }
+
+    private static object? GetIndexedProperty(object target, int index)
+    {
+        var property = target.GetType().GetProperty("Item", BindingFlags.Instance | BindingFlags.Public);
+        if (property is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return property.GetValue(target, [index]);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private void StartInventoryInternal()
@@ -423,5 +542,34 @@ public sealed class ZebraSdkProvider : IRfidProvider, IAsyncDisposable
         }
 
         _ = TryInvoke(target, methodName, args);
+    }
+
+    private static bool TryInvokeVoid(object target, string methodName, params object?[]? args)
+    {
+        var methods = target.GetType()
+            .GetMethods(BindingFlags.Instance | BindingFlags.Public)
+            .Where(method => method.Name == methodName)
+            .ToArray();
+
+        foreach (var method in methods)
+        {
+            var parameters = method.GetParameters();
+            var values = args ?? [];
+            if (parameters.Length != values.Length)
+            {
+                continue;
+            }
+
+            try
+            {
+                method.Invoke(target, values);
+                return true;
+            }
+            catch
+            {
+            }
+        }
+
+        return false;
     }
 }

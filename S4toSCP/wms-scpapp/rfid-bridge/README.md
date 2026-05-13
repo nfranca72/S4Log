@@ -32,7 +32,7 @@ Nesta fase:
 ### Ativar ZebraSdk
 
 1. Instalar o Host RFID SDK oficial da Zebra na máquina Windows
-2. Colocar o caminho da DLL em `RfidBridge:ZebraSdk:AssemblyPath`
+2. Copiar as DLLs do SDK para `Utilities\ZebraSdk` ou colocar o caminho da DLL em `RfidBridge:ZebraSdk:AssemblyPath`
 3. Alterar `RfidBridge:Provider` para `ZebraSdk`
 
 Exemplo:
@@ -45,9 +45,9 @@ Exemplo:
     "Port": 5084,
     "Antennas": [2, 3, 4],
     "ZebraSdk": {
-      "AssemblyPath": "C:\\\\Program Files\\\\Zebra RFID SDK\\\\Symbol.RFID3.Host.dll",
+      "AssemblyPath": "Utilities\\\\ZebraSdk\\\\Symbol.RFID3.Host.dll",
       "ReaderTypeName": "Symbol.RFID3.RFIDReader",
-      "ConnectionTimeout": 30,
+      "ConnectionTimeout": 30000,
       "PollIntervalMs": 250
     }
   }

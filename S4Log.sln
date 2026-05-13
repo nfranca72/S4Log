@@ -1,0 +1,35 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.5.2.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "S4toSCP", "S4toSCP", "{617DA7D0-37A7-FE92-B0C0-A1BC40DD62B6}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "wms-scpapp", "wms-scpapp", "{33B065E1-8529-7DD4-92D6-3F90BB15AD38}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "rfid-bridge", "rfid-bridge", "{6DDA77C5-C59A-75E8-797D-10C249990CA1}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RfidBridge", "S4toSCP\wms-scpapp\rfid-bridge\RfidBridge.csproj", "{57CD118B-B983-1E54-17E2-CB4F914A6BBD}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{57CD118B-B983-1E54-17E2-CB4F914A6BBD}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{57CD118B-B983-1E54-17E2-CB4F914A6BBD}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{57CD118B-B983-1E54-17E2-CB4F914A6BBD}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{57CD118B-B983-1E54-17E2-CB4F914A6BBD}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{33B065E1-8529-7DD4-92D6-3F90BB15AD38} = {617DA7D0-37A7-FE92-B0C0-A1BC40DD62B6}
+		{6DDA77C5-C59A-75E8-797D-10C249990CA1} = {33B065E1-8529-7DD4-92D6-3F90BB15AD38}
+		{57CD118B-B983-1E54-17E2-CB4F914A6BBD} = {6DDA77C5-C59A-75E8-797D-10C249990CA1}
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {0A89BBD0-05F0-4D2E-A10C-92EC2EF21FA9}
+	EndGlobalSection
+EndGlobal

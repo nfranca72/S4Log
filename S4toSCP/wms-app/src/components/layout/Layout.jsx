@@ -2,10 +2,11 @@ import { NavLink } from 'react-router-dom'
 import styles from './Layout.module.css'
 
 const nav = [
-  { to: '/importacao',   label: 'Importação',     icon: '⬆' },
-  { to: '/recepcao',     label: 'Receção',         icon: '📦' },
-  { to: '/consulta',     label: 'Consulta',         icon: '🔍' },
-  { to: '/configuracao', label: 'Configuração',    icon: '⚙' },
+  { to: '/importacao', label: 'Importacao', icon: 'IMP' },
+  { to: '/recepcao', label: 'Rececao', icon: 'REC' },
+  { to: '/consulta', label: 'Consulta', icon: 'CON' },
+  { to: '/etiquetas', label: 'Etiquetas RFID', icon: 'RF' },
+  { to: '/configuracao', label: 'Configuracao', icon: 'CFG' },
 ]
 
 export default function Layout({ children }) {
@@ -14,7 +15,7 @@ export default function Layout({ children }) {
       <aside className={styles.sidebar}>
         <div className={styles.logo}>
           <span className={styles.logoMark}>WMS</span>
-          <span className={styles.logoSub}>Armazém</span>
+          <span className={styles.logoSub}>Armazem</span>
         </div>
         <nav className={styles.nav}>
           {nav.map(n => (

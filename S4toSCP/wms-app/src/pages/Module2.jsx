@@ -3,7 +3,12 @@ import { useToast } from '../context/ToastContext'
 import { Card, CardTitle, Btn, Spinner } from '../components/ui'
 import styles from './Module2.module.css'
 
-const API = '/api'
+const API = import.meta.env.VITE_API_URL ?? '/api'
+
+function rfidWebSocketBase() {
+  const base = import.meta.env.VITE_API_URL ?? `${window.location.protocol}//${window.location.host}/api`
+  return base.replace(/^http/, 'ws').replace(/\/$/, '')
+}
 
 function statusInfo(s) {
   if (s === 'conferida')  return { label: 'Conferida',       color: 'var(--green)',  bg: 'rgba(52,211,153,.12)' }
@@ -44,6 +49,7 @@ export default function Module2() {
   const [itemQtys, setItemQtys]     = useState({})
   const [itemTags, setItemTags]     = useState({})
   const [confirming, setConfirming] = useState(false)
+  const [canceling, setCanceling]   = useState(false)
   const [testMode, setTestMode]     = useState(false)
   const [manualQty, setManualQty]   = useState('')
   const [rfidCount, setRfidCount]   = useState(0)
@@ -131,13 +137,18 @@ export default function Module2() {
 
   // ── RFID ──────────────────────────────────────────────────────────────────
   const [rfidActive, setRfidActive] = useState(false)
+  const rfidActiveRef = useRef(false)
   const [rfidStatus, setRfidStatus] = useState('idle')  // idle | reading | stopped
   const [selectedTunnel, setSelectedTunnel] = useState(1)
   const [tunnels, setTunnels] = useState([])
 
+  useEffect(() => {
+    rfidActiveRef.current = rfidActive
+  }, [rfidActive])
+
   // Carrega túneis disponíveis ao iniciar
   useEffect(() => {
-    fetch('/api/config/tunnels').then(r => r.json()).then(d => {
+    fetch(`${API}/config/tunnels`).then(r => r.json()).then(d => {
       if (Array.isArray(d) && d.length) {
         setTunnels(d)
         setSelectedTunnel(d[0].tunnel_id)
@@ -150,7 +161,7 @@ export default function Module2() {
     if (testMode) return
     if (wsRef.current?.readyState === WebSocket.OPEN) return  // já ligado
     wsRef.current?.close()
-    const wsBase = (import.meta.env.VITE_API_URL ?? 'http://localhost:8000').replace(/^http/, 'ws')
+    const wsBase = rfidWebSocketBase()
     const ws = new WebSocket(`${wsBase}/ws/rfid?tunnel_id=${tunnelId ?? selectedTunnel}`)
     ws.onopen = () => {
       setRfidStatus('idle')
@@ -160,7 +171,7 @@ export default function Module2() {
       // "ready" = backend confirmou ligação
       // "reset" = backend confirmou nova leitura
       // "tags"  = tags novas detectadas — só actualiza se leitura activa
-      if (d.type === 'tags' && rfidActive) {
+      if (d.type === 'tags' && rfidActiveRef.current) {
         setRfidCount(d.count ?? 0)
         rfidTagsRef.current = d.tags || []
       } else if (d.type === 'reset') {
@@ -188,18 +199,18 @@ export default function Module2() {
     setRfidActive(true)
     setRfidStatus('reading')
     if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ action: 'start' }))
+      wsRef.current.send(JSON.stringify({ action: 'reset' }))
     } else {
       // Conecta e envia start assim que ligar
-      const wsBase = (import.meta.env.VITE_API_URL ?? 'http://localhost:8000').replace(/^http/, 'ws')
+      const wsBase = rfidWebSocketBase()
       const ws = new WebSocket(`${wsBase}/ws/rfid?tunnel_id=${selectedTunnel}`)
       ws.onopen = () => {
-        ws.send(JSON.stringify({ action: 'start' }))
+        ws.send(JSON.stringify({ action: 'reset' }))
         setRfidStatus('reading')
       }
       ws.onmessage = e => {
         const d = JSON.parse(e.data)
-        if ((d.type === 'tags') && rfidActive) {
+        if ((d.type === 'tags') && rfidActiveRef.current) {
           setRfidCount(d.count ?? 0)
           rfidTagsRef.current = d.tags || []
         } else if (d.type === 'reset') {
@@ -234,12 +245,13 @@ export default function Module2() {
   const validateItem = () => {
     if (!activeItem) return
     const qty = currentQty
+    const tags = [...rfidTagsRef.current]
+    stopRfid()
     setItemQtys(prev => ({ ...prev, [activeItem.item_id]: qty }))
     setItemTags(prev => ({
       ...prev,
-      [activeItem.item_id]: testMode ? [] : [...rfidTagsRef.current],
+      [activeItem.item_id]: testMode ? [] : tags,
     }))
-    setRfidActive(false)
     setRfidStatus('idle')
     setRfidCount(0)
     setManualQty('')
@@ -306,6 +318,36 @@ export default function Module2() {
   }
 
   // ── New scan ──────────────────────────────────────────────────────────────
+  const cancelBoxConfirmation = async () => {
+    if (!packing || !activeBox?.verified) return
+    const ok = window.confirm('Anular a entrada desta caixa e retirar o stock associado?')
+    if (!ok) return
+
+    setCanceling(true)
+    try {
+      const res = await fetch(
+        `${API}/packing/${packing.order_id}/boxes/${activeBox.vol_num}/cancel-confirmation`,
+        { method: 'POST' }
+      )
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: 'Erro no servidor' }))
+        throw new Error(err.detail || 'Erro ao anular entrada')
+      }
+
+      toast('Entrada da caixa anulada com sucesso', 'success')
+      const boxList = await fetch(`${API}/packing/${packing.order_id}/boxes`).then(r => r.json())
+      setBoxes(boxList)
+      await openBox(packing.order_id, activeBox.vol_num)
+      setItemQtys({})
+      setItemTags({})
+      setRfidCount(0)
+    } catch (e) {
+      toast(e.message || 'Erro ao anular entrada da caixa', 'error')
+    } finally {
+      setCanceling(false)
+    }
+  }
+
   const newScan = () => {
     setPhase('scan')
     setPacking(null)
@@ -487,6 +529,14 @@ export default function Module2() {
                       )}
                     </div>
                   </Card>
+
+                  {activeBox.verified && (
+                    <div style={{marginTop:-12,marginBottom:12,display:'flex',justifyContent:'flex-end'}}>
+                      <Btn variant="outline" loading={canceling} onClick={cancelBoxConfirmation}>
+                        Anular entrada da caixa
+                      </Btn>
+                    </div>
+                  )}
 
                   {/* Multi-article alert */}
                   {activeBox.items.length > 1 && !activeItem && Object.keys(itemQtys).length < activeBox.items.length && (

@@ -108,9 +108,341 @@ def fetch_coonsumption_for_itemmaster_and_bpartner(
     ]
 
 
+def fetch_production_entries_by_dates(
+    from_date: date,
+    to_date: date,
+) -> list[dict[str, object]]:
+    query = """
+        WITH Movs AS (
+            SELECT DISTINCT
+                CAST(co.OrderDateTime AS date) AS DateMov,
+                co.DocType,
+                co.OrderID,
+                codo.DocTypeOri,
+                codo.OrderIDOri,
+                codop.ItemID,
+                coop.ClientID,
+                bp.PartnerName AS ClientName,
+                bps.PartnerID AS SubcontratadoId,
+                bps.PartnerName AS SubcontratadoName,
+                cod.IDIntegration,
+                co.IDIntegration AS ClientOrdersIDIntegration
+            FROM ClientOrders co WITH (NOLOCK)
+            JOIN ClientOrderDetails cod WITH (NOLOCK)
+                ON cod.DocType = co.DocType
+               AND cod.OrderID = co.OrderID
+            JOIN ClientOrderDetailsOri codo WITH (NOLOCK)
+                ON codo.DocType = cod.DocType
+               AND codo.OrderID = cod.OrderID
+               AND codo.OrderRow = cod.OrderRow
+            JOIN ClientOrderDetails codop WITH (NOLOCK)
+                ON codop.DocType = codo.DocTypeOri
+               AND codop.OrderID = codo.OrderIDOri
+               AND codop.OrderRow = codo.OrderRowOri
+            JOIN ClientOrders coop WITH (NOLOCK)
+                ON coop.DocType = codop.DocType
+               AND coop.OrderID = codop.OrderID
+            JOIN BusinessPartners bp WITH (NOLOCK)
+                ON bp.PartnerType = 'C'
+               AND bp.PartnerID = coop.ClientID
+            JOIN BusinessPartners bps WITH (NOLOCK)
+                ON bps.PartnerType = 'S'
+               AND bps.PartnerID = coop.SubContratado
+            WHERE co.DocType = 'ENTP'
+              AND co.OrderDateTime >= ?
+              AND co.OrderDateTime <= ?
+              AND SUBSTRING(cod.IDIntegration, 1, 2) <> 'SM'
+        )
+        SELECT
+            m.DateMov,
+            m.DocType,
+            m.OrderID,
+            m.DocTypeOri,
+            m.OrderIDOri,
+            m.ItemID,
+            m.ClientID,
+            m.ClientName,
+            m.SubcontratadoId,
+            m.SubcontratadoName,
+            m.IDIntegration,
+            m.ClientOrdersIDIntegration,
+            (
+                SELECT SUM(cod.QtyOrd)
+                FROM ClientOrderDetails cod WITH (NOLOCK)
+                WHERE cod.DocType = m.DocType
+                  AND cod.OrderID = m.OrderID
+            ) AS Qty
+        FROM Movs m
+        ORDER BY m.OrderID ASC
+    """
+
+    with db_cursor() as (cursor, _conn):
+        cursor.execute(query, (from_date, to_date))
+        rows = cursor.fetchall()
+
+    return [
+        {
+            "DateMov": row[0],
+            "DocType": row[1],
+            "OrderID": row[2],
+            "DocTypeOri": row[3],
+            "OrderIDOri": row[4],
+            "ItemID": row[5],
+            "ClientID": row[6],
+            "ClientName": row[7],
+            "SubcontratadoId": row[8],
+            "SubcontratadoName": row[9],
+            "IDIntegration": row[10],
+            "ClientOrdersIDIntegration": row[11],
+            "Qty": row[12],
+        }
+        for row in rows
+    ]
+
+
+def fetch_production_entrie_status(
+    doc_type: str,
+    order_id: int,
+) -> list[dict[str, object]]:
+    query = """
+        WITH Movimento AS (
+            SELECT DISTINCT
+                CAST(sm.MovDateTime AS date) AS DataMov,
+                bp.PartnerID,
+                bp.GLNCode,
+                bp.PartnerName,
+                sm.ItemID,
+                sm.ColorID,
+                sm.SizeID,
+                sm.Qty,
+                codim.QtyOrd AS QtyOrigem,
+                codo.DocTypeOri,
+                codo.OrderIDOri,
+                codo.OrderRowOri,
+                cod.Versao,
+                (
+                    SELECT TOP 1 coentp.IDIntegration
+                    FROM ClientOrderDetails coentp WITH (NOLOCK)
+                    WHERE coentp.DocType = ?
+                      AND coentp.OrderID = ?
+                ) AS IdIntegration,
+                ISNULL(imc.CharacteristicValue, '') AS ProjectCode
+            FROM StockMov sm WITH (NOLOCK)
+            JOIN ClientOrderDetailsOri codo WITH (NOLOCK)
+                ON codo.DocType = sm.DocTypeOrig
+               AND codo.OrderID = sm.DocOrig
+            JOIN ClientOrdersDim codim WITH (NOLOCK)
+                ON codim.DocType = codo.DocTypeOri
+               AND codim.OrderID = codo.OrderIDOri
+               AND codim.OrderRow = codo.OrderRowOri
+               AND codim.SizeID = sm.SizeID
+               AND codim.ColorID = sm.ColorID
+            JOIN ClientOrderDetails cod WITH (NOLOCK)
+                ON cod.DocType = codim.DocType
+               AND cod.OrderID = codim.OrderID
+               AND cod.OrderRow = codim.OrderRow
+            JOIN ItemMaster im WITH (NOLOCK)
+                ON im.ItemID = cod.ItemID
+            LEFT JOIN ItemMasterCharacteristics imc WITH (NOLOCK)
+                ON imc.ItemID = cod.ItemID
+               AND imc.Version = cod.Versao
+               AND imc.CharacteristicID = 'PROJETO'
+            JOIN ClientOrders co WITH (NOLOCK)
+                ON co.DocType = cod.DocType
+               AND co.OrderID = cod.OrderID
+            JOIN BusinessPartners bp WITH (NOLOCK)
+                ON bp.PartnerType = 'S'
+               AND bp.PartnerID = co.Subcontratado
+            WHERE sm.DocTypeOrig = ?
+              AND sm.DocOrig = ?
+        ),
+        Componentes AS (
+            SELECT
+                mov.DataMov,
+                mov.PartnerID AS SubcontratadoS3,
+                mov.GLNCode AS SubcontratadoSap,
+                mov.PartnerName AS SubcontratadoName,
+                mov.ProjectCode,
+                ic.ComponentID,
+                mov.IdIntegration,
+                ic.Qty * mov.Qty AS QtyMov,
+                ic.Qty * mov.QtyOrigem AS QtyOri,
+                mov.DocTypeOri AS OPSDocType,
+                mov.OrderIDOri AS OPSOrderId,
+                mov.OrderRowOri AS OPSOrderRow
+            FROM Movimento mov
+            JOIN ClientOrdersDim codim WITH (NOLOCK)
+                ON codim.DocType = mov.DocTypeOri
+               AND codim.OrderID = mov.OrderIDOri
+               AND codim.OrderRow = mov.OrderRowOri
+               AND codim.ColorID = mov.ColorID
+               AND codim.SizeID = mov.SizeID
+            JOIN ClientOrderComp coc WITH (NOLOCK)
+                ON coc.DocType = mov.DocTypeOri
+               AND coc.OrderID = mov.OrderIDOri
+               AND coc.OrderRow = mov.OrderRowOri
+            JOIN ItemComp ic WITH (NOLOCK)
+                ON ic.ItemID = mov.ItemID
+               AND ic.Versao = mov.Versao
+               AND ic.ComponentID = coc.ComponentID
+               AND ic.ItemGroupID = coc.ItemGroupID
+               AND ic.ItemSubGroupID = coc.ItemSubGroupID
+               AND ic.Variacao = 0
+               AND ic.IsNeeded = 1
+
+            UNION
+
+            SELECT
+                mov.DataMov,
+                mov.PartnerID AS SubcontratadoS3,
+                mov.GLNCode AS SubcontratadoSap,
+                mov.PartnerName AS SubcontratadoName,
+                mov.ProjectCode,
+                ic.ComponentIDEsp AS ComponentID,
+                mov.IdIntegration,
+                ic.Qty * mov.Qty AS QtyMov,
+                ic.Qty * mov.QtyOrigem AS QtyOri,
+                mov.DocTypeOri AS OPSDocType,
+                mov.OrderIDOri AS OPSOrderId,
+                mov.OrderRowOri AS OPSOrderRow
+            FROM Movimento mov
+            JOIN ClientOrdersDim codim WITH (NOLOCK)
+                ON codim.DocType = mov.DocTypeOri
+               AND codim.OrderID = mov.OrderIDOri
+               AND codim.OrderRow = mov.OrderRowOri
+               AND codim.ColorID = mov.ColorID
+               AND codim.SizeID = mov.SizeID
+            JOIN ClientOrderComp coc WITH (NOLOCK)
+                ON coc.DocType = mov.DocTypeOri
+               AND coc.OrderID = mov.OrderIDOri
+               AND coc.OrderRow = mov.OrderRowOri
+            JOIN ItemCompEsp ic WITH (NOLOCK)
+                ON ic.ItemID = mov.ItemID
+               AND ic.Versao = mov.Versao
+               AND ic.ComponentIDEsp = coc.ComponentID
+               AND ic.ItemGroupID = coc.ItemGroupID
+               AND ic.ItemSubGroupID = coc.ItemSubGroupID
+               AND (ic.ColorID = mov.ColorID OR ic.ColorID = '')
+               AND (ic.SizeID = mov.SizeID OR ic.SizeID = '')
+            WHERE ic.Variacao <> 0
+              AND ic.IsNeeded = 1
+        ),
+        Result AS (
+            SELECT
+                comp.DataMov,
+                comp.SubcontratadoS3,
+                comp.SubcontratadoSap,
+                comp.SubcontratadoName,
+                comp.ProjectCode,
+                comp.ComponentID,
+                SUM(comp.QtyMov) AS QtyTot,
+                SUM(comp.QtyOri) AS QtyOri,
+                im.StkUnit,
+                im.ItemValue,
+                comp.OPSDocType,
+                comp.OPSOrderId,
+                comp.OPSOrderRow,
+                comp.IdIntegration
+            FROM Componentes comp
+            JOIN ItemMaster im WITH (NOLOCK)
+                ON im.ItemID = comp.ComponentID
+            GROUP BY
+                comp.DataMov,
+                comp.SubcontratadoS3,
+                comp.SubcontratadoSap,
+                comp.SubcontratadoName,
+                comp.ProjectCode,
+                comp.ComponentID,
+                im.StkUnit,
+                im.ItemValue,
+                comp.OPSDocType,
+                comp.OPSOrderId,
+                comp.OPSOrderRow,
+                comp.IdIntegration
+        ),
+        Final AS (
+            SELECT
+                r.*,
+                ISNULL((
+                    SELECT SUM(cod.QtyOrd)
+                    FROM ClientOrderDetailsOri codo WITH (NOLOCK)
+                    JOIN ClientOrderDetails cod WITH (NOLOCK)
+                        ON cod.DocType = codo.DocType
+                       AND cod.OrderID = codo.OrderID
+                       AND cod.OrderRow = codo.OrderRow
+                    WHERE codo.DocTypeOri = r.OPSDocType
+                      AND codo.OrderIDOri = r.OPSOrderId
+                      AND codo.OrderRowOri = r.OPSOrderRow
+                      AND codo.DocType = 'CONS'
+                      AND cod.ItemID = r.ComponentID
+                ), 0) AS QtyCons
+            FROM Result r
+        )
+        SELECT
+            f.DataMov,
+            f.SubcontratadoS3,
+            f.SubcontratadoSap,
+            f.SubcontratadoName,
+            f.ProjectCode,
+            f.ComponentID,
+            f.QtyOri AS QtyNecOPS,
+            f.QtyTot AS QtyPrevENTP,
+            f.QtyCons AS QtyConsOPS,
+            f.QtyOri - f.QtyCons AS QtyTot,
+            f.StkUnit,
+            f.ItemValue,
+            f.OPSDocType,
+            f.OPSOrderId,
+            f.OPSOrderRow,
+            f.IdIntegration
+        FROM Final f
+        ORDER BY f.ComponentID, f.OPSDocType, f.OPSOrderId, f.OPSOrderRow
+    """
+
+    with db_cursor() as (cursor, _conn):
+        cursor.execute(query, (doc_type, order_id, doc_type, order_id))
+        rows = cursor.fetchall()
+        columns = [str(column[0]) for column in cursor.description]
+
+    return [dict(zip(columns, row)) for row in rows]
+
+
 def fetch_consumption_context(item_id: str, project: str, subcontract_id: str) -> dict[str, Any]:
     del project  # Kept in contract for future filtering parity with legacy code.
 
+    context = fetch_subcontractor_consumption_context(subcontract_id)
+
+    origin_query = """
+        SELECT TOP 1 cod.DocType, cod.OrderID, cod.OrderRow
+        FROM ClientOrderDetails cod WITH (NOLOCK)
+        JOIN ClientOrders co WITH (NOLOCK)
+            ON co.DocType = cod.DocType
+           AND co.OrderID = cod.OrderID
+           AND co.SubContratado = ?
+        WHERE cod.ItemID = ?
+        ORDER BY cod.OrderID DESC, cod.OrderRow DESC
+    """
+
+    with db_cursor() as (cursor, _conn):
+        cursor.execute(origin_query, (context["subcontract_partner_id"], item_id))
+        origin_row = cursor.fetchone()
+
+        if not origin_row:
+            raise ValueError(
+                "No origin OPS document was found for the supplied ItemId and PartnerID"
+            )
+
+    context.update(
+        {
+            "origin_doc_type": str(origin_row[0]),
+            "origin_order_id": int(origin_row[1]),
+            "origin_order_row": int(origin_row[2]),
+        }
+    )
+    return context
+
+
+def fetch_subcontractor_consumption_context(subcontract_id: str) -> dict[str, Any]:
     normalized_subcontract_id = subcontract_id.strip()
     if not normalized_subcontract_id:
         raise ValueError("PartnerID is required to resolve subcontractor context")
@@ -124,17 +456,6 @@ def fetch_consumption_context(item_id: str, project: str, subcontract_id: str) -
               OR bp.GLNCode = ?
           )
         ORDER BY CASE WHEN bp.PartnerID = ? THEN 0 ELSE 1 END, bp.PartnerID
-    """
-
-    origin_query = """
-        SELECT TOP 1 cod.DocType, cod.OrderID, cod.OrderRow
-        FROM ClientOrderDetails cod WITH (NOLOCK)
-        JOIN ClientOrders co WITH (NOLOCK)
-            ON co.DocType = cod.DocType
-           AND co.OrderID = cod.OrderID
-           AND co.SubContratado = ?
-        WHERE cod.ItemID = ?
-        ORDER BY cod.OrderID DESC, cod.OrderRow DESC
     """
 
     with db_cursor() as (cursor, _conn):
@@ -152,20 +473,10 @@ def fetch_consumption_context(item_id: str, project: str, subcontract_id: str) -
         resolved_subcontract_id = str(subcontract_row[0]).strip()
         resolved_gln_code = str(subcontract_row[1] or "").strip()
 
-        cursor.execute(origin_query, (resolved_subcontract_id, item_id))
-        origin_row = cursor.fetchone()
-
-        if not origin_row:
-            raise ValueError(
-                "No origin OPS document was found for the supplied ItemId and PartnerID"
-            )
     if not resolved_gln_code:
         raise ValueError("No consumption location (GLNCode) was found for the supplied PartnerID")
 
     return {
-        "origin_doc_type": str(origin_row[0]),
-        "origin_order_id": int(origin_row[1]),
-        "origin_order_row": int(origin_row[2]),
         "subcontract_partner_id": resolved_subcontract_id,
         "local_consumo": f"200-{resolved_gln_code}",
     }
@@ -372,6 +683,29 @@ def create_local_consumption_document(
                 cache=cache,
             )
 
+            inherited_origin = _fetch_detail_origin(
+                cursor,
+                doc_type=origin_doc_type,
+                order_id=origin_order_id,
+                order_row=origin_order_row,
+            )
+            if inherited_origin is not None:
+                inherited_ori_values = {
+                    **ori_values,
+                    "DocTypeOri": inherited_origin["doc_type_ori"],
+                    "OrderIDOri": inherited_origin["order_id_ori"],
+                    "OrderRowOri": inherited_origin["order_row_ori"],
+                    "PartNumOri": inherited_origin["part_num_ori"],
+                    "VolNumOri": inherited_origin["vol_num_ori"],
+                }
+                _insert_dynamic(
+                    cursor,
+                    "ClientOrderDetailsOri",
+                    inherited_ori_values,
+                    required_columns={"DocType", "OrderID", "OrderRow"},
+                    cache=cache,
+                )
+
             mov_id = _insert_stock_movement(
                 cursor=cursor,
                 cache=cache,
@@ -441,6 +775,41 @@ def _next_doc_order_id(cursor, doc_type: str) -> int:
         (base, base, doc_type),
     )
     return int(cursor.fetchone()[0]) + 1
+
+
+def _fetch_detail_origin(
+    cursor,
+    doc_type: str,
+    order_id: int,
+    order_row: int,
+) -> dict[str, Any] | None:
+    cursor.execute(
+        """
+        SELECT TOP 1
+            DocTypeOri,
+            OrderIDOri,
+            OrderRowOri,
+            PartNumOri,
+            VolNumOri
+        FROM ClientOrderDetailsOri WITH (NOLOCK)
+        WHERE DocType = ?
+          AND OrderID = ?
+          AND OrderRow = ?
+        ORDER BY OrderRowOri
+        """,
+        (doc_type, order_id, order_row),
+    )
+    row = cursor.fetchone()
+    if not row:
+        return None
+
+    return {
+        "doc_type_ori": str(row[0]),
+        "order_id_ori": int(row[1]),
+        "order_row_ori": int(row[2]),
+        "part_num_ori": int(row[3] or 0),
+        "vol_num_ori": int(row[4] or 0),
+    }
 
 
 def _table_columns(

@@ -154,6 +154,12 @@ class ConfirmBoxResult(BaseModel):
     order_id:     Optional[int] = None
 
 
+class CancelBoxConfirmationResult(BaseModel):
+    success:  bool
+    message:  str = ''
+    order_id: Optional[int] = None
+
+
 # ── Módulo 1B — Encomenda ESCP ─────────────────────────────────────────────────
 
 class OrderRow(BaseModel):

@@ -6,6 +6,7 @@ venv/
 .DS_Store
 dist/
 build/
+publish/
 *.log
 .vscode/
 bin/

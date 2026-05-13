@@ -62,6 +62,25 @@ class ConsumptionRequest(BaseModel):
     lines: list[ConsumptionLine] = Field(..., alias="Lines", min_length=1)
 
 
+class ConsumptionWithOriginHeader(ConsumptionHeader):
+    origin_doc_type: str = Field(..., alias="OriginDocType", min_length=1, max_length=20)
+    origin_order_id: int = Field(..., alias="OriginOrderID")
+    origin_order_row: int = Field(..., alias="OriginOrderRow")
+
+    @field_validator("origin_doc_type")
+    @classmethod
+    def normalize_origin_doc_type(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if not normalized:
+            raise ValueError("OriginDocType is required")
+        return normalized
+
+
+class ConsumptionWithOriginRequest(BaseModel):
+    header: ConsumptionWithOriginHeader = Field(..., alias="Header")
+    lines: list[ConsumptionLine] = Field(..., alias="Lines", min_length=1)
+
+
 class ConsumptionResultLine(BaseModel):
     component_id: str = Field(..., alias="ComponentId")
     qty_requested: Decimal = Field(..., alias="QtyRequested")

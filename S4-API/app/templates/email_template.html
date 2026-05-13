@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Resumo de Vendas</title>
+</head>
+<body style="margin:0; padding:0; background-color:#f5f5f3; font-family: Arial, Helvetica, sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f5f5f3; padding: 32px 16px;">
+    <tr>
+      <td align="center">
+        <table width="760" cellpadding="0" cellspacing="0" border="0" style="width:760px; max-width:760px; background-color:#ffffff; border-radius:8px; border: 1px solid #e0dfd8;">
+          <tr>
+            <td style="padding: 28px 32px 20px 32px; border-bottom: 1px solid #e0dfd8;">
+              <p style="margin:0 0 4px 0; font-size:12px; color:#888780;">{{ DATA_EMAIL }}</p>
+              <h1 style="margin:0; font-size:20px; font-weight:600; color:#2c2c2a;">Resumo de Vendas</h1>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 24px 32px;">
+{{ SALES_SECTIONS }}
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 16px 32px 24px 32px; border-top: 1px solid #e0dfd8;">
+              <p style="margin:0; font-size:11px; color:#b4b2a9; line-height:1.6;">
+                Valores calculados a partir de DocMovs &middot; AreaCod = VENDAS<br>
+                "Ate hoje" e "Mes corrente" comparam o mesmo periodo homologo nos anos anteriores.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

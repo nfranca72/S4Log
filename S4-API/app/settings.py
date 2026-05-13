@@ -1,11 +1,16 @@
 from typing import Optional
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
 
 
 class Settings(BaseSettings):
     api_host: str = "0.0.0.0"
     api_port: int = 8000
+    api_key: Optional[str] = None
+    api_key_hashes: Optional[str] = None
 
     db_connection_string: Optional[str] = None
     db_connection_string_encrypted: Optional[str] = None
@@ -26,7 +31,29 @@ class Settings(BaseSettings):
     sap_sl_timeout_seconds: int = 30
     sap_sl_location_field: Optional[str] = None
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    sales_email_smtp_server: Optional[str] = None
+    sales_email_smtp_port: int = 587
+    sales_email_sender: Optional[str] = None
+    sales_email_password: Optional[str] = None
+    sales_email_recipients: Optional[str] = None
+    sales_email_subject_prefix: str = "Resumo de Vendas"
+
+    sales_ma_email_smtp_server: Optional[str] = None
+    sales_ma_email_smtp_port: int = 587
+    sales_ma_email_sender: Optional[str] = None
+    sales_ma_email_password: Optional[str] = None
+    sales_ma_email_recipients: Optional[str] = None
+    sales_ma_email_subject_prefix: str = "Resumo de Vendas"
+
+    sales_db_connection_string: Optional[str] = None
+    sales_db_host: Optional[str] = None
+    sales_db_name: Optional[str] = None
+    sales_db_user: Optional[str] = None
+    sales_db_password: Optional[str] = None
+    sales_db_driver: str = "ODBC Driver 17 for SQL Server"
+    sales_db_trust_server_certificate: Optional[str] = None
+
+    model_config = SettingsConfigDict(env_file=ENV_FILE, extra="ignore")
 
     @staticmethod
     def _normalize_boolean_value(value: Optional[str]) -> Optional[str]:
@@ -40,7 +67,12 @@ class Settings(BaseSettings):
             return "no"
         return value.strip()
 
-    def _normalize_connection_string(self, connection_string: str) -> str:
+    def _normalize_connection_string(
+        self,
+        connection_string: str,
+        driver: Optional[str] = None,
+        trust_server_certificate_default: Optional[str] = None,
+    ) -> str:
         parts = [part.strip() for part in connection_string.split(";") if part.strip()]
         values = {}
         for part in parts:
@@ -77,6 +109,7 @@ class Settings(BaseSettings):
         trust_server_certificate = (
             values.get("trustservercertificate")
             or values.get("trust server certificate")
+            or trust_server_certificate_default
             or self.db_trust_server_certificate
         )
         trust_server_certificate = self._normalize_boolean_value(trust_server_certificate)
@@ -91,7 +124,7 @@ class Settings(BaseSettings):
             extra_parts.append(f"TrustServerCertificate={trust_server_certificate};")
 
         return (
-            f"DRIVER={{{self.db_driver}}};"
+            f"DRIVER={{{driver or self.db_driver}}};"
             f"SERVER={server};"
             f"DATABASE={database};"
             f"UID={user};"
@@ -129,6 +162,50 @@ class Settings(BaseSettings):
             f"DATABASE={self.db_name};"
             f"UID={self.db_user};"
             f"PWD={self.db_password};"
+        )
+
+    @property
+    def sales_connection_string(self) -> str:
+        if self.sales_db_connection_string:
+            return self._normalize_sales_connection_string(self.sales_db_connection_string)
+
+        required_fields = {
+            "SALES_DB_HOST": self.sales_db_host,
+            "SALES_DB_NAME": self.sales_db_name,
+            "SALES_DB_USER": self.sales_db_user,
+            "SALES_DB_PASSWORD": self.sales_db_password,
+        }
+        missing_fields = [field for field, value in required_fields.items() if not value]
+        if missing_fields:
+            missing = ", ".join(missing_fields)
+            raise ValueError(
+                f"Sales database configuration is incomplete. Missing: {missing}. "
+                "Set SALES_DB_CONNECTION_STRING or the individual SALES_DB_* variables."
+            )
+
+        trust_server_certificate = self._normalize_boolean_value(
+            self.sales_db_trust_server_certificate
+        )
+        extra = (
+            f"TrustServerCertificate={trust_server_certificate};"
+            if trust_server_certificate
+            else ""
+        )
+
+        return (
+            f"DRIVER={{{self.sales_db_driver}}};"
+            f"SERVER={self.sales_db_host};"
+            f"DATABASE={self.sales_db_name};"
+            f"UID={self.sales_db_user};"
+            f"PWD={self.sales_db_password};"
+            f"{extra}"
+        )
+
+    def _normalize_sales_connection_string(self, connection_string: str) -> str:
+        return self._normalize_connection_string(
+            connection_string,
+            driver=self.sales_db_driver,
+            trust_server_certificate_default=self.sales_db_trust_server_certificate,
         )
 
 

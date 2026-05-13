@@ -546,7 +546,7 @@ function TabPacking() {
             <select className={styles.select} value={selectedEscp?.order_id||''}
               onChange={e => setSelectedEscp(escpOrders.find(o => o.order_id === parseInt(e.target.value)) || null)}
               onFocus={loadEscpOrders}>
-              <option value="">Sem encomenda associada</option>
+              <option value="">Seleciona uma encomenda ESCP</option>
               {escpOrders.map(o => <option key={o.order_id} value={o.order_id}>#{o.order_id} — {o.client_id} ({o.total_lines} linhas)</option>)}
             </select>
             {selectedEscp && <span className={styles.activePill}>✓ Encomenda #{selectedEscp.order_id}</span>}
@@ -700,7 +700,7 @@ function TabPacking() {
             <CardTitle>Resumo</CardTitle>
             <InfoGrid>
               <InfoField label="Nº Packing"        value={result.packing?.order_id}    mono />
-              <InfoField label="Cliente"            value={client?.client_id}           mono />
+              <InfoField label="Cliente"            value={selectedEscp?.client_id || result.packing?.client_id} mono />
               <InfoField label="Total peças"        value={result.packing?.total_qty}   mono />
               <InfoField label="Total caixas"       value={result.packing?.total_boxes} mono />
               <InfoField label="Artigos criados"    value={result.items_created}        mono />

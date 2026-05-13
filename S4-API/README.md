@@ -35,6 +35,36 @@ uvicorn app.main:app --reload
 
 Cria um ficheiro `.env` a partir de `.env.example`.
 
+## Segurança API Key
+
+Gera uma chave forte para entregar ao cliente e guarda no servidor apenas o hash SHA-256 dessa chave.
+
+Exemplo de chave entregue ao cliente:
+
+```env
+s4_live_fsm_trocar_por_token_longo
+```
+
+Exemplo de configuração no servidor:
+
+```env
+API_KEY_HASHES=hash_sha256_da_chave_do_cliente
+```
+
+Podes configurar várias chaves separando os hashes por vírgula:
+
+```env
+API_KEY_HASHES=hash_cliente_a,hash_cliente_b
+```
+
+Todos os endpoints exigem que o cliente envie a chave em claro no header:
+
+```http
+X-API-Key: s4_live_fsm_trocar_por_token_longo
+```
+
+No Swagger (`/docs`), usa o botão **Authorize** e introduz o valor da chave.
+
 Opção 1: usar a connection string já desencriptada
 
 ```env
@@ -83,6 +113,7 @@ SAP_SL_LOCATION_FIELD=U_LocationCode
 - `GET /ItemMaster/ActiveItems?PartnerId=2376&PartnerType=C&ProductionType=PRODUCTION&IncludeImage=false&Version=1&ClientSigla=FSM` para listar artigos ativos. Quando `IncludeImage=true`, devolve `HasImage` por artigo em vez do binário da imagem.
 - `GET /ItemMaster/Image?ItemId=5TRWWW48993&ClientSigla=FSM&Version=0` para obter diretamente o primeiro anexo do tipo `IMAGE` de um artigo, devolvido como conteúdo binário com o `Content-Type` adequado.
 - `GET /ProductionControl/CoonsumptionforItemMasterandBPartner?ItemId=5TRWWW48993&DocTypeArea=PLANING&BpId=10514` para listar abastecimentos, retornos e consumos por artigo e parceiro.
+- `GET /ProductionControl/GetProductionEntriesByDates?FromDate=2026-04-01&ToDate=2026-04-30` para listar entradas de produção entre duas datas.
 - `POST /ProductionControl/Consumption` para criar consumo de componentes (movimento SAP B1 + espelho na base SQL local), limitando a quantidade à disponibilidade verificada no SAP B1 por armazém e localização/bin antes de atualizar `CONS`, `StockMov` e `Inventory`, e devolvendo no retorno a mensagem final, o número do movimento SAP e o número do documento local `CONS`.
 - `GET /docs` para aceder à documentação Swagger gerada automaticamente.
 
@@ -104,3 +135,68 @@ SAP_SL_LOCATION_FIELD=U_LocationCode
   ]
 }
 ```
+
+## Email resumo de vendas
+
+Configuracao no `.env`:
+
+```env
+SALES_DB_CONNECTION_STRING=
+SALES_DB_HOST=SERVIDOR_VENDAS
+SALES_DB_NAME=BASE_DADOS_VENDAS
+SALES_DB_USER=UTILIZADOR_VENDAS
+SALES_DB_PASSWORD=PASSWORD_VENDAS
+SALES_DB_DRIVER=ODBC Driver 17 for SQL Server
+SALES_DB_TRUST_SERVER_CERTIFICATE=yes
+
+SALES_EMAIL_SMTP_SERVER=smtp.gmail.com
+SALES_EMAIL_SMTP_PORT=587
+SALES_EMAIL_SENDER=seuemail@empresa.pt
+SALES_EMAIL_PASSWORD=app_password
+SALES_EMAIL_RECIPIENTS=administracao@empresa.pt,financeiro@empresa.pt
+SALES_EMAIL_SUBJECT_PREFIX=Resumo de Vendas
+
+SALES_MA_EMAIL_SMTP_SERVER=smtp.gmail.com
+SALES_MA_EMAIL_SMTP_PORT=587
+SALES_MA_EMAIL_SENDER=relatorios-ma@empresa.pt
+SALES_MA_EMAIL_PASSWORD=app_password_ma
+SALES_MA_EMAIL_RECIPIENTS=administracao-ma@empresa.pt,financeiro-ma@empresa.pt
+SALES_MA_EMAIL_SUBJECT_PREFIX=Resumo de Vendas
+```
+
+A base de dados do resumo de vendas e independente da base de dados principal da API. Podes usar `SALES_DB_CONNECTION_STRING` completa ou preencher os campos `SALES_DB_*` separados.
+
+Para Gmail, usa uma App Password. Para Outlook/Office 365, usa `smtp.office365.com`.
+
+Endpoint:
+
+```http
+GET /SalesSummary/SendEmail
+```
+
+Para validar os dados sem enviar email:
+
+```http
+GET /SalesSummary/SendEmail?PreviewOnly=true
+```
+
+Para ver o HTML final do email no browser:
+
+```http
+GET /SalesSummary/Preview
+```
+
+## Email resumo de vendas MA
+
+Usa a mesma configuracao SQL `SALES_DB_*`, mas tem configuracao SMTP propria em `SALES_MA_EMAIL_*`.
+
+Endpoints:
+
+```http
+GET /SalesSummaryMA/Companies
+GET /SalesSummaryMA/Preview?Company=NOME_EMPRESA
+GET /SalesSummaryMA/SendEmail?Company=NOME_EMPRESA
+GET /SalesSummaryMA/SendEmail?Company=NOME_EMPRESA&PreviewOnly=true
+```
+
+Os dados sao lidos de `dbo.DocMovsAcum`, filtrando por `COMPANY`. A connection string de vendas deve apontar para a base de dados `Ons3_Dash`.

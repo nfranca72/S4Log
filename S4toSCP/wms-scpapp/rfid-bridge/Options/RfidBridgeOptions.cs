@@ -15,6 +15,6 @@ public sealed class ZebraSdkOptions
 {
     public string AssemblyPath { get; set; } = string.Empty;
     public string ReaderTypeName { get; set; } = "Symbol.RFID3.RFIDReader";
-    public uint ConnectionTimeout { get; set; } = 30;
+    public uint ConnectionTimeout { get; set; } = 30000;
     public int PollIntervalMs { get; set; } = 250;
 }

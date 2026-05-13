@@ -91,6 +91,9 @@ def get_escp_orders() -> list[dict]:
             LEFT JOIN ClientOrderDetails d
                 ON d.OrderID = o.OrderID AND d.DocType = 'ESCP'
             WHERE o.DocType = 'ESCP'
+              AND UPPER(LTRIM(RTRIM(ISNULL(CAST(o.Status AS varchar(50)), '')))) NOT IN (
+                  'ANULADA', 'CANCELADA', 'FECHADA'
+              )
             GROUP BY o.OrderID, o.ClientID, o.OrderDateTime, o.Obs, o.TotalQtyOrd
             ORDER BY o.OrderID DESC
         """)
@@ -106,6 +109,20 @@ def get_escp_orders() -> list[dict]:
         }
         for r in rows
     ]
+
+
+def get_active_escp_client_id(order_id: int) -> str | None:
+    with db_cursor() as (cursor, _):
+        cursor.execute("""
+            SELECT ClientID
+            FROM ClientOrders o
+            WHERE o.OrderID = ? AND o.DocType = 'ESCP'
+              AND UPPER(LTRIM(RTRIM(ISNULL(CAST(o.Status AS varchar(50)), '')))) NOT IN (
+                  'ANULADA', 'CANCELADA', 'FECHADA'
+              )
+        """, (order_id,))
+        row = cursor.fetchone()
+    return row[0] if row else None
 
 
 def get_escp_order_details(order_id: int) -> list[dict]:

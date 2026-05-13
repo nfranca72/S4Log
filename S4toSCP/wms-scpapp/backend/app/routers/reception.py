@@ -6,12 +6,12 @@ from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from app.models.schemas import (
     PackingListSummary, BoxSummary, BoxDetail,
     WarehouseInfo, LocationInfo,
-    ConfirmBoxRequest, ConfirmBoxResult
+    ConfirmBoxRequest, ConfirmBoxResult, CancelBoxConfirmationResult
 )
 from app.services.reception_service import (
     get_packing_lists, get_boxes, get_box_detail,
     get_warehouses, get_locations, confirm_box,
-    find_packing_by_barcode
+    find_packing_by_barcode, cancel_box_confirmation
 )
 from app.services.rfid_bridge_client import (
     RfidBridgeClient,
@@ -54,11 +54,35 @@ def confirm_box_endpoint(order_id: int, vol_num: int, req: ConfirmBoxRequest):
         raise HTTPException(status_code=400, detail=result.message)
     return result
 
+
+@router.post("/packing/{order_id}/boxes/{vol_num}/cancel-confirmation", response_model=CancelBoxConfirmationResult)
+def cancel_box_confirmation_endpoint(order_id: int, vol_num: int):
+    result = cancel_box_confirmation(vol_num, order_id)
+    if not result.success:
+        raise HTTPException(status_code=400, detail=result.message)
+    return result
+
 _bridge_client = RfidBridgeClient(settings.RFID_BRIDGE_URL)
 
 # ── Túneis RFID ───────────────────────────────────────────────────────────────
 # tunnel_id -> {"wss": set, "poller": Task | None, "last_tags": set[str]}
 _tunnels: dict[int, dict] = {}
+
+
+def _filter_registered_rfid_tags(tags: set[str]) -> set[str]:
+    if not tags:
+        return set()
+
+    tag_list = sorted(tags)
+    placeholders = ",".join("?" for _ in tag_list)
+    with db_cursor() as (cursor, _):
+        cursor.execute(
+            f"SELECT TAG FROM ItemMasterRFIDTags WHERE TAG IN ({placeholders})",
+            tag_list,
+        )
+        registered = {str(row[0]).strip() for row in cursor.fetchall() if row[0]}
+
+    return tags - registered
 
 
 def _load_tunnel_config(tunnel_id: int):
@@ -137,6 +161,7 @@ async def _poll_bridge_tags(tunnel_id: int):
                 for tag in snapshot.get("tags", [])
                 if str(tag.get("epc", "")).strip()
             }
+            tags = _filter_registered_rfid_tags(tags)
             if tags != tunnel["last_tags"]:
                 tunnel["last_tags"] = tags
                 await _broadcast_tunnel_tags(tunnel_id, tags)
@@ -181,6 +206,7 @@ async def rfid_websocket(websocket: WebSocket, tunnel_id: int = 1):
         for tag in snapshot.get("tags", [])
         if str(tag.get("epc", "")).strip()
     }
+    tags = _filter_registered_rfid_tags(tags)
     tunnel["last_tags"] = tags
     await _ensure_tunnel_poller(tunnel_id)
     await websocket.send_text(json.dumps({

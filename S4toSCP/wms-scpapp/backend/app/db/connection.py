@@ -9,7 +9,8 @@ def get_connection_string() -> str:
         f"DATABASE={settings.DB_NAME};"
         f"UID={settings.DB_USER};"
         f"PWD={settings.DB_PASSWORD};"
-        "TrustServerCertificate=yes;"
+        f"Encrypt={settings.DB_ENCRYPT};"
+        f"TrustServerCertificate={settings.DB_TRUST_SERVER_CERTIFICATE};"
     )
 
 def get_connection() -> pyodbc.Connection:
