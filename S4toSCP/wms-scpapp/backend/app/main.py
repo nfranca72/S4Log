@@ -2,6 +2,7 @@ import logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -9,11 +10,23 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from app.routers import clients, items, packing, reception, orders, config, consulting, labels
+from app.sap_integrator.lifecycle import start_integrator, stop_integrator
+from app.sap_integrator.routers.api import router as sap_integrator_router
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    start_integrator()
+    try:
+        yield
+    finally:
+        stop_integrator()
 
 app = FastAPI(
     title="Warehouse API",
     description="API de gestão de receção de mercadoria",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -37,6 +50,9 @@ routers = [
 for router in routers:
     app.include_router(router)
     app.include_router(router, prefix="/api")
+
+app.include_router(sap_integrator_router, prefix="/sap-b1")
+app.include_router(sap_integrator_router, prefix="/api/sap-b1")
 
 @app.get("/health")
 def health():

@@ -20,6 +20,9 @@
   --radius:    10px;
   --radius-sm: 6px;
   --radius-lg: 14px;
+  /* aliases — usadas em alguns módulos */
+  --text1:     #e2e8f0;
+  --hover:     #1f2436;
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }

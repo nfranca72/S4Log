@@ -31,6 +31,19 @@ class Settings(BaseSettings):
     sap_sl_timeout_seconds: int = 30
     sap_sl_location_field: Optional[str] = None
 
+    by_ptl_wms_url: Optional[str] = None
+    by_ptl_wms_verify_ssl: bool = False
+    by_ptl_wms_timeout_seconds: int = 30
+    by_ptl_wms_api_key: Optional[str] = None
+    by_ptl_wms_api_key_header: str = "X-API-Key"
+    by_ptl_wms_login_url: Optional[str] = None
+    by_ptl_wms_login_user: Optional[str] = None
+    by_ptl_wms_login_password: Optional[str] = None
+    by_ptl_wms_login_user_param: str = "usr_id"
+    by_ptl_wms_login_password_param: str = "password"
+    by_ptl_wms_auth_token_header: str = "Authorization"
+    by_ptl_wms_auth_token_prefix: str = "Bearer "
+
     sales_email_smtp_server: Optional[str] = None
     sales_email_smtp_port: int = 587
     sales_email_sender: Optional[str] = None

@@ -91,3 +91,40 @@ export const ordersApi = {
       body: JSON.stringify({ order_id: orderId, rows_to_add: rowsToAdd, rows_to_update: rowsToUpdate }),
     }),
 }
+
+/* ── SAP B1 Integrator ── */
+export const sapB1Api = {
+  status: () => request('/sap-b1/status'),
+  config: () => request('/sap-b1/config'),
+  updateConfig: (payload) =>
+    request('/sap-b1/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+  toggle: (integration, enabled) =>
+    request(`/sap-b1/toggle/${integration}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    }),
+  runNow: (integration) =>
+    request(`/sap-b1/run-now/${integration}`, {
+      method: 'POST',
+    }),
+  health: () => request('/sap-b1/health'),
+  errors: (integration = '') =>
+    request(`/sap-b1/errors${integration ? `?integration=${encodeURIComponent(integration)}` : ''}`),
+  resolveError: (id, payload) =>
+    request(`/sap-b1/errors/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+  retryError: (id) =>
+    request(`/sap-b1/errors/${id}/retry`, {
+      method: 'POST',
+    }),
+  logs: (integration = '') =>
+    request(`/sap-b1/logs?limit=50${integration ? `&integration=${encodeURIComponent(integration)}` : ''}`),
+}

@@ -722,24 +722,21 @@ export default function Module1() {
 
   return (
     <div>
-      <div style={{marginBottom:28}}>
-        <h1 style={{fontSize:22,fontWeight:600,marginBottom:6}}>Importação</h1>
-        <p style={{fontSize:13,color:'var(--text2)'}}>Encomendas e packing lists Nike</p>
+      <div className={styles.pageHeader}>
+        <h1 className={styles.pageTitle}>Importação</h1>
+        <p className={styles.pageDesc}>Encomendas e packing lists Nike</p>
       </div>
 
-      <div style={{display:'flex',gap:2,marginBottom:24,background:'var(--surface)',border:'1px solid var(--border)',borderRadius:'var(--radius)',overflow:'hidden'}}>
+      <div className={styles.tabs}>
         {[
-          { key: 'encomenda', label: '📋 Encomenda (Excel)' },
-          { key: 'packing',   label: '📦 Packing List (CSV)' },
+          { key: 'encomenda', label: 'Encomenda (Excel)' },
+          { key: 'packing',   label: 'Packing List (CSV)' },
         ].map(t => (
-          <button key={t.key} onClick={() => setActiveTab(t.key)} style={{
-            flex:1, padding:'12px 20px', border:'none', cursor:'pointer',
-            background: activeTab===t.key ? 'rgba(79,142,247,.15)' : 'transparent',
-            color: activeTab===t.key ? 'var(--accent)' : 'var(--text2)',
-            fontFamily:'var(--font-sans)', fontSize:14, fontWeight: activeTab===t.key ? 600 : 400,
-            borderBottom: activeTab===t.key ? '2px solid var(--accent)' : '2px solid transparent',
-            transition:'all .15s',
-          }}>{t.label}</button>
+          <button
+            key={t.key}
+            className={`${styles.tab} ${activeTab === t.key ? styles.tabActive : ''}`}
+            onClick={() => setActiveTab(t.key)}
+          >{t.label}</button>
         ))}
       </div>
 

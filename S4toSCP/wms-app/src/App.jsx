@@ -6,6 +6,7 @@ import Module2 from './pages/Module2'
 import Module3 from './pages/Module3'
 import Config from './pages/Config'
 import Labels from './pages/Labels'
+import SAPB1 from './pages/SAPB1'
 
 export default function App() {
   return (
@@ -17,6 +18,7 @@ export default function App() {
           <Route path="/recepcao"   element={<Module2 />} />
           <Route path="/consulta"   element={<Module3 />} />
           <Route path="/etiquetas"  element={<Labels />} />
+          <Route path="/sap-b1" element={<SAPB1 />} />
           <Route path="/configuracao" element={<Config />} />
         </Routes>
       </Layout>

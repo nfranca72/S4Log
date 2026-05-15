@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { Btn } from '../components/ui'
 import styles from './Module3.module.css'
 
 const BASE = import.meta.env.VITE_API_URL ?? '/api'
@@ -263,6 +264,10 @@ export default function Module3() {
 
   return (
     <div className={styles.page}>
+      <div className={styles.pageHeader}>
+        <h1 className={styles.pageTitle}>Consulta</h1>
+        <p className={styles.pageDesc}>Packing lists e encomendas</p>
+      </div>
       <div className={styles.filterBar}>
         <div className={styles.filterGroup}>
           <label>Tipo</label>
@@ -295,17 +300,15 @@ export default function Module3() {
             type="text" placeholder="Nº interno ou ref. cliente..."
             value={searchText} onChange={e => setSearchText(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && search()}
-            style={{padding:'6px 10px',border:'1px solid var(--border)',borderRadius:'6px',background:'var(--bg)',color:'var(--text1)',fontSize:'14px',minWidth:'200px'}}
+            className={styles.searchInput}
           />
         </div>
-        <button className={styles.btnPrimary} onClick={search} disabled={loading}>
-          {loading ? 'A pesquisar...' : 'Pesquisar'}
-        </button>
+        <Btn variant="primary" onClick={search} loading={loading}>Pesquisar</Btn>
         {selected && (
-          <button className={styles.btnExportBar} onClick={exportCSV}>↓ CSV Caixas</button>
+          <Btn variant="outline" onClick={exportCSV}>↓ CSV Caixas</Btn>
         )}
         {selected && (
-          <button className={styles.btnExportBar} onClick={exportTotals}>↓ CSV Totais</button>
+          <Btn variant="outline" onClick={exportTotals}>↓ CSV Totais</Btn>
         )}
       </div>
 

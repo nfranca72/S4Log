@@ -63,9 +63,16 @@
 .navItem.active {
   background: rgba(79, 142, 247, .12);
   color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 
-.navIcon { font-size: 15px; width: 20px; text-align: center; }
+.navIcon {
+  width: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
 
 .sidebarFooter {
   padding: 16px 20px 0;

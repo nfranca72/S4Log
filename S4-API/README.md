@@ -104,6 +104,94 @@ SAP_SL_TIMEOUT_SECONDS=30
 SAP_SL_LOCATION_FIELD=U_LocationCode
 ```
 
+## Configuração BY-PTL para WMS externo
+
+```env
+BY_PTL_WMS_URL=https://wms-server/api/byptl
+BY_PTL_WMS_VERIFY_SSL=false
+BY_PTL_WMS_TIMEOUT_SECONDS=30
+BY_PTL_WMS_API_KEY=
+BY_PTL_WMS_API_KEY_HEADER=X-API-Key
+BY_PTL_WMS_LOGIN_URL=https://byptdev.prhge.com:4700/ws/auth/login
+BY_PTL_WMS_LOGIN_USER=ONSEARCH
+BY_PTL_WMS_LOGIN_PASSWORD=trocar_password
+BY_PTL_WMS_LOGIN_USER_PARAM=usr_id
+BY_PTL_WMS_LOGIN_PASSWORD_PARAM=password
+BY_PTL_WMS_AUTH_TOKEN_HEADER=Authorization
+BY_PTL_WMS_AUTH_TOKEN_PREFIX=Bearer 
+```
+
+O endpoint unico da area `BY-PTL` fica disponivel em:
+
+```http
+POST /BY-PTL/BYPTL
+```
+
+Este endpoint aceita uma acao e os respetivos dados, valida o payload e reencaminha a mensagem para o endpoint unico do WMS externo.
+Se `BY_PTL_WMS_LOGIN_URL` estiver preenchido, a API faz primeiro o login no WMS com `usr_id` e `password`, reaproveita a sessao HTTP e, se existir um token no JSON de resposta, envia-o no header configurado.
+
+### Exemplo `PTL_START`
+
+```json
+{
+  "Action": "PTL_START",
+  "Data": {
+    "WAVEID": "WAVE-001",
+    "PTLID": "PTL-01"
+  }
+}
+```
+
+### Exemplo `PTL_CHANGE`
+
+```json
+{
+  "Action": "PTL_CHANGE",
+  "Data": {
+    "WAVEID": "WAVE-001",
+    "PTLID": "PTL-02"
+  }
+}
+```
+
+### Exemplo `PICKING_LIST`
+
+Nota: o ultimo payload corresponde a `PICKING_LIST` e nao a `PACKED_BOX`.
+
+```json
+{
+  "Action": "PICKING_LIST",
+  "Data": {
+    "WAVEID": "WAVE-001",
+    "PTLID": "PTL-01",
+    "PACKINGLISTID": "PK-001",
+    "ORDERS": [
+      {
+        "ORDERID": "ORD-001",
+        "PTLLIGHT": "A01",
+        "VOLUMES": [
+          {
+            "VOLUMEID": "VOL-001",
+            "VOLUMEWEIGHT": 10,
+            "VOLUMETYPE": "BOX",
+            "USERID": "USR01",
+            "VOLUMEDETAIL": [
+              {
+                "ORDERID": "ORD-001",
+                "VOLUMROWID": "1",
+                "LINE": "1",
+                "ITEMID": "ITEM-001",
+                "QUANTITY": 5
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
 ## Endpoints iniciais
 
 - `GET /health` para validar que a API está ativa.

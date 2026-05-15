@@ -83,7 +83,20 @@ export function InfoGrid({ children }) {
 export function ResultBanner({ ok, title, detail }) {
   return (
     <div className={`${styles.resultBanner} ${ok ? styles.bannerOk : styles.bannerWarn}`}>
-      <div className={styles.resultIcon}>{ok ? '✅' : '⚠️'}</div>
+      <div className={`${styles.resultIcon} ${ok ? styles.iconOk : styles.iconWarn}`}>
+        {ok ? (
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="10"/>
+            <path d="M9 12l2 2 4-4"/>
+          </svg>
+        ) : (
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+            <line x1="12" y1="9" x2="12" y2="13"/>
+            <line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+        )}
+      </div>
       <div>
         <div className={styles.resultTitle}>{title}</div>
         {detail && <div className={styles.resultDetail}>{detail}</div>}

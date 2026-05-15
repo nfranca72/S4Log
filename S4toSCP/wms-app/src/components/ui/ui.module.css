@@ -154,7 +154,9 @@
 }
 .bannerOk   { background: rgba(52,211,153,.07);  border-color: rgba(52,211,153,.3); }
 .bannerWarn { background: rgba(251,191,36,.07);  border-color: rgba(251,191,36,.3); }
-.resultIcon { font-size: 22px; flex-shrink: 0; margin-top: 2px; }
+.resultIcon { flex-shrink: 0; margin-top: 2px; display: flex; }
+.iconOk   { color: var(--green); }
+.iconWarn { color: var(--yellow); }
 .resultTitle  { font-weight: 600; font-size: 15px; margin-bottom: 4px; }
 .resultDetail { font-size: 13px; color: var(--text2); line-height: 1.6; }
 

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Optional
+from enum import Enum
+from typing import Optional, Type, Union
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
 
 
 def _validate_decimal_6_2(value: Decimal) -> Decimal:
@@ -109,4 +110,137 @@ class ByPtlWaveResponse(BaseModel):
     order_lines_count: int = Field(..., alias="OrderLinesCount")
     picking_created: bool = Field(default=False, alias="PickingCreated")
     picking_details_count: int = Field(default=0, alias="PickingDetailsCount")
+    message: str = Field(..., alias="Message")
+
+
+class ByPtlAction(str, Enum):
+    PTL_START = "PTL_START"
+    PTL_CHANGE = "PTL_CHANGE"
+    PICKING_LIST = "PICKING_LIST"
+
+
+class ByPtlSimpleActionData(BaseModel):
+    wave_id: str = Field(..., alias="WAVEID", min_length=1, max_length=50)
+    ptl_id: str = Field(..., alias="PTLID", min_length=1, max_length=50)
+
+    @field_validator("wave_id", "ptl_id", mode="before")
+    @classmethod
+    def normalize_text(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
+
+class ByPtlPickingListDetail(BaseModel):
+    order_id: str = Field(..., alias="ORDERID", min_length=1, max_length=50)
+    volume_row_id: str = Field(..., alias="VOLUMROWID", min_length=1, max_length=50)
+    line: str = Field(..., alias="LINE", min_length=1, max_length=50)
+    item_id: str = Field(..., alias="ITEMID", min_length=1, max_length=50)
+    quantity: Decimal = Field(..., alias="QUANTITY", ge=0)
+
+    @field_validator("order_id", "volume_row_id", "line", "item_id", mode="before")
+    @classmethod
+    def normalize_text(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
+
+class ByPtlPickingListVolume(BaseModel):
+    volume_id: str = Field(..., alias="VOLUMEID", min_length=1, max_length=50)
+    volume_weight: Decimal = Field(..., alias="VOLUMEWEIGHT", ge=0)
+    volume_type: str = Field(..., alias="VOLUMETYPE", min_length=1, max_length=50)
+    user_id: str = Field(..., alias="USERID", min_length=1, max_length=50)
+    volume_detail: list[ByPtlPickingListDetail] = Field(..., alias="VOLUMEDETAIL", min_length=1)
+
+    @field_validator("volume_id", "volume_type", "user_id", mode="before")
+    @classmethod
+    def normalize_text(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
+
+class ByPtlPickingListOrder(BaseModel):
+    order_id: str = Field(..., alias="ORDERID", min_length=1, max_length=50)
+    ptl_light: str = Field(..., alias="PTLLIGHT", min_length=1, max_length=50)
+    volumes: list[ByPtlPickingListVolume] = Field(..., alias="VOLUMES", min_length=1)
+
+    @field_validator("order_id", "ptl_light", mode="before")
+    @classmethod
+    def normalize_text(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
+
+class ByPtlPickingListData(BaseModel):
+    wave_id: str = Field(..., alias="WAVEID", min_length=1, max_length=50)
+    ptl_id: str = Field(..., alias="PTLID", min_length=1, max_length=50)
+    packing_list_id: str = Field(..., alias="PACKINGLISTID", min_length=1, max_length=50)
+    orders: list[ByPtlPickingListOrder] = Field(..., alias="ORDERS", min_length=1)
+
+    @field_validator("wave_id", "ptl_id", "packing_list_id", mode="before")
+    @classmethod
+    def normalize_text(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
+
+ByPtlValidatedPayload = Union[ByPtlSimpleActionData, ByPtlPickingListData]
+
+
+class ByPtlDispatchRequest(BaseModel):
+    action: str = Field(..., alias="Action", min_length=1, max_length=50)
+    data: dict = Field(..., alias="Data")
+
+    _validated_payload: ByPtlValidatedPayload = PrivateAttr()
+    _action_to_send: ByPtlAction = PrivateAttr()
+
+    @field_validator("action", mode="before")
+    @classmethod
+    def normalize_action(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+
+        normalized = value.strip().upper()
+        if normalized == "PACKED_BOX":
+            return ByPtlAction.PICKING_LIST.value
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_payload(self) -> "ByPtlDispatchRequest":
+        try:
+            action = ByPtlAction(self.action)
+        except ValueError as exc:
+            supported = ", ".join(action.value for action in ByPtlAction)
+            raise ValueError(f"Unsupported BY-PTL action '{self.action}'. Supported: {supported}") from exc
+
+        payload_model: Type[BaseModel]
+        if action in {ByPtlAction.PTL_START, ByPtlAction.PTL_CHANGE}:
+            payload_model = ByPtlSimpleActionData
+        else:
+            payload_model = ByPtlPickingListData
+
+        self._validated_payload = payload_model.model_validate(self.data)
+        self._action_to_send = action
+        return self
+
+    @property
+    def validated_payload(self) -> ByPtlValidatedPayload:
+        return self._validated_payload
+
+    @property
+    def action_to_send(self) -> ByPtlAction:
+        return self._action_to_send
+
+
+class ByPtlDispatchResponse(BaseModel):
+    action_requested: str = Field(..., alias="ActionRequested")
+    action_sent: str = Field(..., alias="ActionSent")
+    endpoint: str = Field(..., alias="Endpoint")
+    http_status: int = Field(..., alias="HttpStatus")
+    request_payload: dict = Field(..., alias="RequestPayload")
+    response_body: str = Field(..., alias="ResponseBody")
     message: str = Field(..., alias="Message")
