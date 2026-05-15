@@ -116,7 +116,8 @@ class ByPtlWaveResponse(BaseModel):
 class ByPtlAction(str, Enum):
     PTL_START = "PTL_START"
     PTL_CHANGE = "PTL_CHANGE"
-    PICKING_LIST = "PICKING_LIST"
+    PACKING_LIST = "PACKING_LIST"
+    PACKED_BOX = "PACKED_BOX"
 
 
 class ByPtlSimpleActionData(BaseModel):
@@ -188,7 +189,53 @@ class ByPtlPickingListData(BaseModel):
         return value
 
 
-ByPtlValidatedPayload = Union[ByPtlSimpleActionData, ByPtlPickingListData]
+class ByPtlPackedBoxDetail(BaseModel):
+    volume_row_id: str = Field(..., alias="VOLUMROWID", min_length=1, max_length=50)
+    line: str = Field(..., alias="LINE", min_length=1, max_length=50)
+    item_id: str = Field(..., alias="ITEMID", min_length=1, max_length=50)
+    quantity: Decimal = Field(..., alias="QUANTITY", ge=0)
+
+    @field_validator("volume_row_id", "line", "item_id", mode="before")
+    @classmethod
+    def normalize_text(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
+
+class ByPtlPackedBoxData(BaseModel):
+    wave_id: str = Field(..., alias="WAVEID", min_length=1, max_length=50)
+    order_id: str = Field(..., alias="ORDERID", min_length=1, max_length=50)
+    ptl_id: str = Field(..., alias="PTLID", min_length=1, max_length=50)
+    ptl_light: str = Field(..., alias="PTLLIGHT", min_length=1, max_length=50)
+    user_id: str = Field(..., alias="USERID", min_length=1, max_length=50)
+    volume_id: str = Field(..., alias="VOLUMEID", min_length=1, max_length=50)
+    volume_weight: Decimal = Field(..., alias="VOLUMEWEIGHT", ge=0)
+    volume_type: str = Field(..., alias="VOLUMETYPE", min_length=1, max_length=50)
+    volume_detail: list[ByPtlPackedBoxDetail] = Field(..., alias="VOLUMEDETAIL", min_length=1)
+
+    @field_validator(
+        "wave_id",
+        "order_id",
+        "ptl_id",
+        "ptl_light",
+        "user_id",
+        "volume_id",
+        "volume_type",
+        mode="before",
+    )
+    @classmethod
+    def normalize_text(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
+
+ByPtlValidatedPayload = Union[
+    ByPtlSimpleActionData,
+    ByPtlPickingListData,
+    ByPtlPackedBoxData,
+]
 
 
 class ByPtlDispatchRequest(BaseModel):
@@ -205,8 +252,8 @@ class ByPtlDispatchRequest(BaseModel):
             return value
 
         normalized = value.strip().upper()
-        if normalized == "PACKED_BOX":
-            return ByPtlAction.PICKING_LIST.value
+        if normalized == "PICKING_LIST":
+            return ByPtlAction.PACKING_LIST.value
         return normalized
 
     @model_validator(mode="after")
@@ -220,8 +267,10 @@ class ByPtlDispatchRequest(BaseModel):
         payload_model: Type[BaseModel]
         if action in {ByPtlAction.PTL_START, ByPtlAction.PTL_CHANGE}:
             payload_model = ByPtlSimpleActionData
-        else:
+        elif action == ByPtlAction.PACKING_LIST:
             payload_model = ByPtlPickingListData
+        else:
+            payload_model = ByPtlPackedBoxData
 
         self._validated_payload = payload_model.model_validate(self.data)
         self._action_to_send = action

@@ -4,6 +4,7 @@ import json
 from typing import Any, Optional
 
 import requests
+from fastapi.encoders import jsonable_encoder
 
 from app.models.by_ptl import ByPtlWaveRequest, ByPtlWaveResponse
 from app.models.by_ptl import ByPtlDispatchRequest, ByPtlDispatchResponse
@@ -79,9 +80,11 @@ def dispatch_to_wms(payload: ByPtlDispatchRequest) -> ByPtlDispatchResponse:
     outbound_payload = {
         payload.action_to_send.value: [
             {
-                "DATA": payload.validated_payload.model_dump(
-                    by_alias=True,
-                    exclude_none=True,
+                "DATA": jsonable_encoder(
+                    payload.validated_payload.model_dump(
+                        by_alias=True,
+                        exclude_none=True,
+                    )
                 )
             }
         ]

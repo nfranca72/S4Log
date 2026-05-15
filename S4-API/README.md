@@ -154,13 +154,13 @@ Se `BY_PTL_WMS_LOGIN_URL` estiver preenchido, a API faz primeiro o login no WMS 
 }
 ```
 
-### Exemplo `PICKING_LIST`
+### Exemplo `PACKING_LIST`
 
-Nota: o ultimo payload corresponde a `PICKING_LIST` e nao a `PACKED_BOX`.
+Nota: o ultimo payload corresponde a `PACKING_LIST` e nao a `PACKED_BOX`.
 
 ```json
 {
-  "Action": "PICKING_LIST",
+  "Action": "PACKING_LIST",
   "Data": {
     "WAVEID": "WAVE-001",
     "PTLID": "PTL-01",
