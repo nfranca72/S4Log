@@ -1,4 +1,6 @@
+import { useEffect, useState } from 'react'
 import { NavLink } from 'react-router-dom'
+import S4LogLogo from '../S4LogLogo'
 import styles from './Layout.module.css'
 
 function IconUpload() {
@@ -65,12 +67,30 @@ const nav = [
 ]
 
 export default function Layout({ children }) {
+  const [theme, setTheme] = useState(() => {
+    try {
+      return window.localStorage.getItem('s4log-theme') || 'dark'
+    } catch {
+      return 'dark'
+    }
+  })
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+    try {
+      window.localStorage.setItem('s4log-theme', theme)
+    } catch {
+      // ignore storage errors
+    }
+  }, [theme])
+
+  const nextTheme = theme === 'dark' ? 'light' : 'dark'
+
   return (
     <div className={styles.shell}>
       <aside className={styles.sidebar}>
         <div className={styles.logo}>
-          <span className={styles.logoMark}>WMS</span>
-          <span className={styles.logoSub}>Armazém</span>
+          <S4LogLogo variant={theme === 'light' ? 'light' : 'dark'} size="full" />
         </div>
         <nav className={styles.nav}>
           {nav.map(n => (
@@ -87,6 +107,27 @@ export default function Layout({ children }) {
           ))}
         </nav>
         <div className={styles.sidebarFooter}>
+          <button
+            type="button"
+            className={styles.themeToggle}
+            onClick={() => setTheme(nextTheme)}
+            aria-label={theme === 'dark' ? 'Ativar tema claro' : 'Ativar tema escuro'}
+            title={theme === 'dark' ? 'Ativar tema claro' : 'Ativar tema escuro'}
+          >
+            <span className={styles.themeIcon} aria-hidden="true">
+              {theme === 'dark' ? (
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="4" />
+                  <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
+                </svg>
+              ) : (
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 12.8A8.5 8.5 0 1111.2 3 6.5 6.5 0 0021 12.8z" />
+                </svg>
+              )}
+            </span>
+            <span>{theme === 'dark' ? 'Tema claro' : 'Tema escuro'}</span>
+          </button>
           <span className={styles.version}>v1.0.0</span>
         </div>
       </aside>

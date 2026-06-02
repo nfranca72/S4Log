@@ -2,6 +2,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from app.models.schemas import (
     PackingListSummary, BoxSummary, BoxDetail,
@@ -62,7 +63,22 @@ def cancel_box_confirmation_endpoint(order_id: int, vol_num: int):
         raise HTTPException(status_code=400, detail=result.message)
     return result
 
-_bridge_client = RfidBridgeClient(settings.RFID_BRIDGE_URL)
+_bridge_clients: dict[str, RfidBridgeClient] = {}
+
+
+def _bridge_url_for_tunnel(tunnel_id: int) -> str:
+    key = f"RFID_BRIDGE_TUNNEL_{tunnel_id}_URL"
+    configured_url = os.getenv(key) or getattr(settings, key, None)
+    return (configured_url or settings.RFID_BRIDGE_URL).rstrip("/")
+
+
+def _bridge_client_for_tunnel(tunnel_id: int) -> RfidBridgeClient:
+    bridge_url = _bridge_url_for_tunnel(tunnel_id)
+    client = _bridge_clients.get(bridge_url)
+    if client is None:
+        client = RfidBridgeClient(bridge_url)
+        _bridge_clients[bridge_url] = client
+    return client
 
 # ── Túneis RFID ───────────────────────────────────────────────────────────────
 # tunnel_id -> {"wss": set, "poller": Task | None, "last_tags": set[str]}
@@ -155,7 +171,8 @@ async def _poll_bridge_tags(tunnel_id: int):
             if not tunnel or not tunnel["wss"]:
                 return
 
-            snapshot = await asyncio.to_thread(_bridge_client.get_tags)
+            bridge_client = _bridge_client_for_tunnel(tunnel_id)
+            snapshot = await asyncio.to_thread(bridge_client.get_tags)
             tags = {
                 str(tag.get("epc", "")).strip()
                 for tag in snapshot.get("tags", [])
@@ -195,7 +212,8 @@ async def rfid_websocket(websocket: WebSocket, tunnel_id: int = 1):
     tunnel["wss"].add(websocket)
 
     try:
-        snapshot = await asyncio.to_thread(_bridge_client.get_tags)
+        bridge_client = _bridge_client_for_tunnel(tunnel_id)
+        snapshot = await asyncio.to_thread(bridge_client.get_tags)
     except RfidBridgeError as exc:
         tunnel["wss"].discard(websocket)
         await websocket.close(code=1011, reason=str(exc)[:120])
@@ -232,16 +250,18 @@ async def rfid_websocket(websocket: WebSocket, tunnel_id: int = 1):
                     config.tx_powers,
                     config.rx_sensitivity,
                 )
+                bridge_client = _bridge_client_for_tunnel(tunnel_id)
                 if action == "start":
-                    await asyncio.to_thread(_bridge_client.start, config)
+                    await asyncio.to_thread(bridge_client.start, config)
                 else:
-                    await asyncio.to_thread(_bridge_client.reset, config)
+                    await asyncio.to_thread(bridge_client.reset, config)
                 tunnel["last_tags"] = set()
                 await _ensure_tunnel_poller(tunnel_id)
                 await _broadcast_tunnel_tags(tunnel_id, set(), "reset")
 
             elif action == "stop":
-                await asyncio.to_thread(_bridge_client.stop)
+                bridge_client = _bridge_client_for_tunnel(tunnel_id)
+                await asyncio.to_thread(bridge_client.stop)
             elif action == "set_delay":
                 logger.info("RFID bridge ignora set_delay para o túnel %s", tunnel_id)
 

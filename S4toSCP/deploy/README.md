@@ -76,13 +76,20 @@ Important values:
 API_HOST=0.0.0.0
 API_PORT=8000
 RFID_BRIDGE_URL=http://<bridge-pc-ip>:5000
+RFID_BRIDGE_TUNNEL_1_URL=http://<bridge-pc-ip>:5001
+RFID_BRIDGE_TUNNEL_2_URL=http://<bridge-pc-ip>:5002
 ```
 
 If the bridge runs on the same server:
 
 ```env
 RFID_BRIDGE_URL=http://127.0.0.1:5000
+RFID_BRIDGE_TUNNEL_1_URL=http://127.0.0.1:5001
+RFID_BRIDGE_TUNNEL_2_URL=http://127.0.0.1:5002
 ```
+
+`RFID_BRIDGE_URL` is kept as a fallback. Reception uses `RFID_BRIDGE_TUNNEL_1_URL`
+or `RFID_BRIDGE_TUNNEL_2_URL` according to the selected RFID tunnel.
 
 ## RFID bridge configuration
 
@@ -136,15 +143,16 @@ RFID bridge:
 
 ```powershell
 cd C:\s4-log\S4toSCP
-.\deploy\run-rfid-bridge.ps1
+.\deploy\run-rfid-bridge-tunnels.ps1
 ```
 
 Test:
 
 ```powershell
-Invoke-WebRequest http://127.0.0.1:5000/health -UseBasicParsing
-Invoke-WebRequest http://127.0.0.1:5000/rfid/start -Method Post -ContentType "application/json" -Body "{}" -UseBasicParsing
-Invoke-WebRequest http://127.0.0.1:5000/rfid/tags -UseBasicParsing
+Invoke-WebRequest http://127.0.0.1:5001/health -UseBasicParsing
+Invoke-WebRequest http://127.0.0.1:5002/health -UseBasicParsing
+Invoke-WebRequest http://127.0.0.1:5001/rfid/tags -UseBasicParsing
+Invoke-WebRequest http://127.0.0.1:5002/rfid/tags -UseBasicParsing
 ```
 
 ## Install services
@@ -156,14 +164,15 @@ Run as Administrator:
 ```powershell
 cd C:\s4-log\S4toSCP
 .\deploy\install-s4toscp-service.ps1 -OpenFirewall
-.\deploy\install-rfid-bridge-service.ps1 -OpenFirewall
+.\deploy\install-rfid-bridge-tunnels.ps1 -OpenFirewall
 ```
 
 Services created:
 
 ```text
-S4toSCP       -> http://0.0.0.0:8000
-S4RfidBridge  -> http://0.0.0.0:5000
+S4toSCP              -> http://0.0.0.0:8000
+S4RfidBridgeTunnel1  -> http://0.0.0.0:5001
+S4RfidBridgeTunnel2  -> http://0.0.0.0:5002
 ```
 
 ## Check status and variables
@@ -176,9 +185,10 @@ cd C:\s4-log\S4toSCP
 Useful commands:
 
 ```powershell
-Get-Service S4toSCP, S4RfidBridge
+Get-Service S4toSCP, S4RfidBridgeTunnel1, S4RfidBridgeTunnel2
 nssm dump S4toSCP
-nssm dump S4RfidBridge
+nssm dump S4RfidBridgeTunnel1
+nssm dump S4RfidBridgeTunnel2
 Get-Content C:\s4-log\S4toSCP\wms-scpapp\backend\.env
 Get-Content C:\s4-log\rfid-bridge\appsettings.json
 ```

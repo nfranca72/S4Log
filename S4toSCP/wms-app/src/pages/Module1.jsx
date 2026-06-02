@@ -7,6 +7,15 @@ import {
 } from '../components/ui'
 import styles from './Module1.module.css'
 
+async function readApiError(res) {
+  const text = await res.text()
+  try {
+    return JSON.parse(text)
+  } catch {
+    return { detail: text || `Erro HTTP ${res.status}` }
+  }
+}
+
 // ── Tab: Encomenda ────────────────────────────────────────────────────────────
 function TabEncomenda() {
   const toast = useToast()
@@ -446,7 +455,7 @@ function TabPacking() {
       fd.append('file', file)
       const res = await fetch(url, { method: 'POST', body: fd })
       if (!res.ok) {
-        const err = await res.json()
+        const err = await readApiError(res)
         if (err.detail?.errors) throw new Error(err.detail.errors.join('\n'))
         throw new Error(err.detail || 'Erro no servidor')
       }
@@ -496,6 +505,8 @@ function TabPacking() {
     return preview.rows.filter(r => { if (r.exists_in_db || seen.has(r.item_id)) return false; seen.add(r.item_id); return true })
   })()
 
+  const packingBlocks = preview?.packings?.length ? preview.packings : []
+
   const doCreateArticles = async () => {
     setLoading(true)
     try {
@@ -509,16 +520,22 @@ function TabPacking() {
   const doImport = async () => {
     setLoading(true)
     try {
-      const data = await fetch('/api/packing/import', {
+      const res = await fetch('/api/packing/import', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           client_id:     '',  // backend obtém da encomenda ESCP
           csv_rows:      preview.rows,
           header:        preview.header,
+          packings:      packingBlocks.map(p => ({ client_id: '', csv_rows: p.rows, header: p.header })),
           escp_order_id: selectedEscp?.order_id || null,
         }),
-      }).then(r => r.json())
+      })
+      if (!res.ok) {
+        const err = await readApiError(res)
+        throw new Error(err.detail || 'Erro no servidor')
+      }
+      const data = await res.json()
       setResult(data); setStep(4)
     } catch (e) { toast(e.message, 'error') }
     finally { setLoading(false) }
@@ -577,6 +594,7 @@ function TabPacking() {
       {step === 2 && preview && (
         <>
           <StatsBar>
+            <Stat label="Packings"        value={packingBlocks.length || 1} color="var(--green)" />
             <Stat label="Caixas"          value={preview.total_boxes}       color="var(--accent)" />
             <Stat label="Total peças"     value={preview.total_qty}         color="var(--accent)" />
             <Stat label="Artigos únicos"  value={preview.total_articles} />
@@ -599,6 +617,29 @@ function TabPacking() {
                 {h.ref_supplier || '—'}
               </div>
             </div>
+
+            {packingBlocks.length > 0 && (
+              <div className={styles.tableWrap} style={{marginTop:14}}>
+                <table className={styles.table}>
+                  <thead><tr>
+                    <th>Documento</th><th>Data</th><th>Ref.</th>
+                    <th style={{textAlign:'right'}}>Caixas</th>
+                    <th style={{textAlign:'right'}}>Pecas</th>
+                  </tr></thead>
+                  <tbody>
+                    {packingBlocks.map((p, i) => (
+                      <tr key={`${p.header.doc_num}-${i}`}>
+                        <td className={styles.mono}>{p.header.doc_num}</td>
+                        <td className={styles.mono}>{p.header.delivery_date}</td>
+                        <td className={styles.mono} style={{fontSize:12}}>{p.header.ref_supplier}</td>
+                        <td className={styles.mono} style={{textAlign:'right'}}>{p.total_boxes}</td>
+                        <td className={styles.mono} style={{textAlign:'right'}}>{p.total_qty}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
 
             <div className={styles.clientSection}>
               <div className={styles.clientConfirm} style={{marginTop:0}}>
@@ -692,9 +733,9 @@ function TabPacking() {
 
       {step === 4 && result && (
         <>
-          <ResultBanner ok={result.packing?.qty_match}
-            title={result.packing?.qty_match ? 'Importação concluída com sucesso' : 'Importação concluída com avisos'}
-            detail={`Packing list #${result.packing?.order_id} criado.${result.warnings?.length ? ' ' + result.warnings.join(' ') : ''}`}
+          <ResultBanner ok={(result.packings?.length ? result.packings : [result.packing]).every(p => p?.qty_match)}
+            title={result.total_packings > 1 ? `${result.total_packings} packings importados` : (result.packing?.qty_match ? 'Importacao concluida com sucesso' : 'Importacao concluida com avisos')}
+            detail={`${result.total_packings > 1 ? 'Packings criados.' : `Packing list #${result.packing?.order_id} criado.`}${result.warnings?.length ? ' ' + result.warnings.join(' ') : ''}`}
           />
           <Card>
             <CardTitle>Resumo</CardTitle>
@@ -703,9 +744,32 @@ function TabPacking() {
               <InfoField label="Cliente"            value={selectedEscp?.client_id || result.packing?.client_id} mono />
               <InfoField label="Total peças"        value={result.packing?.total_qty}   mono />
               <InfoField label="Total caixas"       value={result.packing?.total_boxes} mono />
+              <InfoField label="Packings"           value={result.total_packings || 1} mono />
               <InfoField label="Artigos criados"    value={result.items_created}        mono />
               <InfoField label="Quantidades ok"     value={result.packing?.qty_match ? '✓ Sim' : '⚠ Divergência'} mono />
             </InfoGrid>
+            {result.total_packings > 1 && (
+              <div className={styles.tableWrap} style={{marginTop:14}}>
+                <table className={styles.table}>
+                  <thead><tr>
+                    <th>Packing</th><th>Cliente</th>
+                    <th style={{textAlign:'right'}}>Pecas</th>
+                    <th style={{textAlign:'right'}}>Caixas</th><th>Quantidades</th>
+                  </tr></thead>
+                  <tbody>
+                    {result.packings.map(p => (
+                      <tr key={p.order_id}>
+                        <td className={styles.mono}>{p.order_id}</td>
+                        <td className={styles.mono}>{selectedEscp?.client_id || p.client_id}</td>
+                        <td className={styles.mono} style={{textAlign:'right'}}>{p.total_qty}</td>
+                        <td className={styles.mono} style={{textAlign:'right'}}>{p.total_boxes}</td>
+                        <td>{p.qty_match ? 'Sim' : 'Divergencia'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </Card>
           <div className={styles.actions}>
             <Btn variant="success" onClick={reset}>Nova importação</Btn>

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import socket
+from pathlib import Path
+
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.db.connection import db_cursor
 from app.settings import settings
@@ -50,6 +53,27 @@ class LabelDocumentLine(BaseModel):
 class LabelPrintConfig(BaseModel):
     description: str
     file_name: str
+
+
+class LabelPrintLine(BaseModel):
+    item_id: str
+    item_desc: str = ""
+    color_id: str = ""
+    grid_id: str = ""
+    size_id: str = ""
+    order_num: int = 0
+    order_row: int | None = None
+    print_qty: int = Field(default=0, ge=0)
+
+
+class LabelPrintRequest(BaseModel):
+    config_file: str
+    lines: list[LabelPrintLine]
+
+
+class LabelPrintResponse(BaseModel):
+    labels_printed: int
+    printer: str
 
 
 class LabelItemPrintData(BaseModel):
@@ -290,3 +314,89 @@ def print_configs():
         LabelPrintConfig(description=row[0], file_name=row[1])
         for row in rows
     ]
+
+
+@router.post("/print", response_model=LabelPrintResponse)
+def print_labels(req: LabelPrintRequest):
+    printer_ip = (settings.ZEBRA_PRINTER_IP or "").strip()
+    if not printer_ip or printer_ip == "0.0.0.0":
+        raise HTTPException(
+            status_code=400,
+            detail="Configura ZEBRA_PRINTER_IP no .env com o IP da impressora Zebra",
+        )
+
+    printable_lines = [line for line in req.lines if line.print_qty > 0]
+    total_labels = sum(line.print_qty for line in printable_lines)
+    if not printable_lines or total_labels <= 0:
+        raise HTTPException(status_code=400, detail="Indica pelo menos uma quantidade de etiquetas")
+
+    template_path = _resolve_label_template(req.config_file)
+    template = template_path.read_text(encoding="utf-8-sig")
+
+    item_data = {line.item_id: item_print_data(line.item_id) for line in printable_lines}
+    zpl_parts: list[str] = []
+    for line in printable_lines:
+        data = item_data[line.item_id]
+        values = {
+            "ITEM_ID": line.item_id,
+            "ITEM_DESC": data.item_desc or line.item_desc,
+            "ITEM_SUBDESC": data.item_subdesc,
+            "CLIENT_REF": data.client_ref,
+            "BARCODE": data.barcode or line.item_id,
+            "PVP": data.pvp,
+            "PVP_SOCIO": data.pvp_socio,
+            "COLOR": line.color_id,
+            "GRID": line.grid_id,
+            "SIZE": line.size_id,
+        }
+        rendered = _render_label_template(template, values)
+        zpl_parts.extend(rendered for _ in range(line.print_qty))
+
+    payload = "\n".join(zpl_parts).encode("utf-8")
+    try:
+        with socket.create_connection((printer_ip, settings.ZEBRA_PRINTER_PORT), timeout=8) as sock:
+            sock.sendall(payload)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Nao foi possivel enviar para a impressora {printer_ip}:{settings.ZEBRA_PRINTER_PORT}: {exc}",
+        ) from exc
+
+    return LabelPrintResponse(
+        labels_printed=total_labels,
+        printer=f"{printer_ip}:{settings.ZEBRA_PRINTER_PORT}",
+    )
+
+
+def _resolve_label_template(file_name: str) -> Path:
+    requested = Path(file_name.strip())
+    if not requested.name or requested.is_absolute() or ".." in requested.parts:
+        raise HTTPException(status_code=400, detail="Ficheiro de etiqueta invalido")
+
+    template_dir = Path(settings.LABEL_TEMPLATE_DIR)
+    if not template_dir.is_absolute():
+        template_dir = Path.cwd() / template_dir
+    template_dir = template_dir.resolve()
+
+    candidates = [template_dir / requested]
+    if not requested.suffix:
+        candidates.extend(template_dir / f"{requested.name}{suffix}" for suffix in (".zpl", ".prn", ".txt"))
+
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        if resolved.is_file() and template_dir in resolved.parents:
+            return resolved
+
+    raise HTTPException(status_code=404, detail=f"Template de etiqueta nao encontrado: {file_name}")
+
+
+def _render_label_template(template: str, values: dict[str, object]) -> str:
+    rendered = template
+    for key, value in values.items():
+        rendered = rendered.replace(f"{{{{{key}}}}}", _zpl_field_value(value))
+    return rendered
+
+
+def _zpl_field_value(value: object) -> str:
+    text = "" if value is None else str(value)
+    return text.replace("^", " ").replace("~", " ").strip()

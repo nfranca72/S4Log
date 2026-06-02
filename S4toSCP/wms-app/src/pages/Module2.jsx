@@ -22,6 +22,10 @@ function tunnelLabel(tunnel, index) {
   return tunnel?.tunnel_code ? `${base} - ${tunnel.tunnel_code}` : base
 }
 
+function itemLineKey(item) {
+  return String(item?.vol_item_number ?? item?.item_id ?? '')
+}
+
 export default function Module2() {
   const toast = useToast()
 
@@ -55,6 +59,7 @@ export default function Module2() {
   const [rfidCount, setRfidCount]   = useState(0)
   const rfidTagsRef = useRef([])      // tags do ciclo actual
   const wsRef                       = useRef(null)
+  const wsTunnelRef                 = useRef(null)
 
   // ── Load warehouses on mount ──────────────────────────────────────────────
   useEffect(() => {
@@ -146,6 +151,24 @@ export default function Module2() {
     rfidActiveRef.current = rfidActive
   }, [rfidActive])
 
+  const clearRfidReading = useCallback(() => {
+    setRfidActive(false)
+    setRfidStatus('idle')
+    setRfidCount(0)
+    setManualQty('')
+    rfidTagsRef.current = []
+  }, [])
+
+  const closeRfidSocket = useCallback((sendStop = true) => {
+    const ws = wsRef.current
+    if (ws && ws.readyState === WebSocket.OPEN && sendStop) {
+      ws.send(JSON.stringify({ action: 'stop' }))
+    }
+    ws?.close()
+    wsRef.current = null
+    wsTunnelRef.current = null
+  }, [])
+
   // Carrega túneis disponíveis ao iniciar
   useEffect(() => {
     fetch(`${API}/config/tunnels`).then(r => r.json()).then(d => {
@@ -159,14 +182,17 @@ export default function Module2() {
   // Conecta WebSocket ao backend — não inicia leitura, só estabelece canal
   const connectRfid = (tunnelId) => {
     if (testMode) return
-    if (wsRef.current?.readyState === WebSocket.OPEN) return  // já ligado
-    wsRef.current?.close()
+    const targetTunnel = tunnelId ?? selectedTunnel
+    if (wsRef.current?.readyState === WebSocket.OPEN && wsTunnelRef.current === targetTunnel) return  // já ligado ao túnel certo
+    closeRfidSocket(true)
     const wsBase = rfidWebSocketBase()
-    const ws = new WebSocket(`${wsBase}/ws/rfid?tunnel_id=${tunnelId ?? selectedTunnel}`)
+    const ws = new WebSocket(`${wsBase}/ws/rfid?tunnel_id=${targetTunnel}`)
     ws.onopen = () => {
+      wsTunnelRef.current = targetTunnel
       setRfidStatus('idle')
     }
     ws.onmessage = e => {
+      if (wsTunnelRef.current !== targetTunnel) return
       const d = JSON.parse(e.data)
       // "ready" = backend confirmou ligação
       // "reset" = backend confirmou nova leitura
@@ -180,9 +206,20 @@ export default function Module2() {
       }
     }
     ws.onerror = () => { toast('Erro na ligação RFID', 'error'); setRfidStatus('idle') }
-    ws.onclose = () => { wsRef.current = null; setRfidStatus('idle') }
+    ws.onclose = () => {
+      if (wsRef.current === ws) {
+        wsRef.current = null
+        wsTunnelRef.current = null
+        setRfidStatus('idle')
+      }
+    }
     wsRef.current = ws
   }
+
+  useEffect(() => {
+    clearRfidReading()
+    closeRfidSocket(true)
+  }, [selectedTunnel, clearRfidReading, closeRfidSocket])
 
   // Garante WebSocket ligado — não reinicia leitura
   const startRfid = () => {
@@ -198,17 +235,20 @@ export default function Module2() {
     rfidTagsRef.current = []
     setRfidActive(true)
     setRfidStatus('reading')
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
+    if (wsRef.current?.readyState === WebSocket.OPEN && wsTunnelRef.current === selectedTunnel) {
       wsRef.current.send(JSON.stringify({ action: 'reset' }))
     } else {
+      closeRfidSocket(true)
       // Conecta e envia start assim que ligar
       const wsBase = rfidWebSocketBase()
       const ws = new WebSocket(`${wsBase}/ws/rfid?tunnel_id=${selectedTunnel}`)
       ws.onopen = () => {
+        wsTunnelRef.current = selectedTunnel
         ws.send(JSON.stringify({ action: 'reset' }))
         setRfidStatus('reading')
       }
       ws.onmessage = e => {
+        if (wsTunnelRef.current !== selectedTunnel) return
         const d = JSON.parse(e.data)
         if ((d.type === 'tags') && rfidActiveRef.current) {
           setRfidCount(d.count ?? 0)
@@ -219,7 +259,13 @@ export default function Module2() {
         }
       }
       ws.onerror = () => { toast('Erro RFID', 'error'); setRfidStatus('idle') }
-      ws.onclose = () => { wsRef.current = null; setRfidStatus('idle') }
+      ws.onclose = () => {
+        if (wsRef.current === ws) {
+          wsRef.current = null
+          wsTunnelRef.current = null
+          setRfidStatus('idle')
+        }
+      }
       wsRef.current = ws
     }
   }
@@ -232,7 +278,10 @@ export default function Module2() {
   }
 
 
-  const currentQty = testMode ? (parseInt(manualQty) || 0) : rfidCount
+  const parsedManualQty = Number.parseInt(manualQty, 10)
+  const hasManualQty = manualQty !== '' && Number.isFinite(parsedManualQty) && parsedManualQty >= 0
+  const currentQty = testMode ? (hasManualQty ? parsedManualQty : 0) : rfidCount
+  const canValidateActiveItem = testMode ? hasManualQty : currentQty > 0
 
   // ── Select item to count ──────────────────────────────────────────────────
   const selectItem = (item) => {
@@ -244,13 +293,18 @@ export default function Module2() {
   // ── Validate single item count ────────────────────────────────────────────
   const validateItem = () => {
     if (!activeItem) return
+    if (!canValidateActiveItem) {
+      toast(testMode ? 'Introduz uma quantidade valida' : 'Faz uma leitura antes de validar', 'error')
+      return
+    }
+    const activeKey = itemLineKey(activeItem)
     const qty = currentQty
     const tags = [...rfidTagsRef.current]
     stopRfid()
-    setItemQtys(prev => ({ ...prev, [activeItem.item_id]: qty }))
+    setItemQtys(prev => ({ ...prev, [activeKey]: qty }))
     setItemTags(prev => ({
       ...prev,
-      [activeItem.item_id]: testMode ? [] : tags,
+      [activeKey]: testMode ? [] : tags,
     }))
     setRfidStatus('idle')
     setRfidCount(0)
@@ -258,7 +312,7 @@ export default function Module2() {
     rfidTagsRef.current = []
 
     const remaining = activeBox.items.filter(
-      i => i.item_id !== activeItem.item_id && !(i.item_id in itemQtys)
+      i => itemLineKey(i) !== activeKey && !(itemLineKey(i) in itemQtys)
     )
     if (remaining.length > 0) {
       setActiveItem(remaining[0])
@@ -269,7 +323,7 @@ export default function Module2() {
   }
 
   const allDone = activeBox
-    ? activeBox.items.every(i => i.item_id in { ...itemQtys, ...(activeItem ? { [activeItem.item_id]: currentQty } : {}) })
+    ? activeBox.items.every(i => itemLineKey(i) in { ...itemQtys, ...(activeItem ? { [itemLineKey(activeItem)]: currentQty } : {}) })
     : false
 
   // ── Confirm box ───────────────────────────────────────────────────────────
@@ -278,10 +332,10 @@ export default function Module2() {
     stopRfid()  // para leitura antes de confirmar
     setConfirming(true)
     const finalQtys = { ...itemQtys }
-    if (activeItem) finalQtys[activeItem.item_id] = currentQty
+    if (activeItem) finalQtys[itemLineKey(activeItem)] = currentQty
     const finalItemTags = { ...itemTags }
     if (activeItem && !testMode) {
-      finalItemTags[activeItem.item_id] = [...rfidTagsRef.current]
+      finalItemTags[itemLineKey(activeItem)] = [...rfidTagsRef.current]
     }
 
     try {
@@ -568,14 +622,15 @@ export default function Module2() {
                         </thead>
                         <tbody>
                           {activeBox.items.map(item => {
-                            const isDone   = item.item_id in itemQtys
-                            const isActive = activeItem?.item_id === item.item_id
-                            const qtyDone  = itemQtys[item.item_id]
+                            const lineKey  = itemLineKey(item)
+                            const isDone   = lineKey in itemQtys
+                            const isActive = itemLineKey(activeItem) === lineKey
+                            const qtyDone  = itemQtys[lineKey]
                             const qtyOk    = isDone && qtyDone >= item.qty_expected
 
                             return (
                               <tr
-                                key={item.item_id}
+                                key={lineKey}
                                 className={`${isActive ? styles.rowActive : ''} ${isDone ? styles.rowDone : ''}`}
                                 onClick={() => !isDone && !activeBox.verified && selectItem(item)}
                                 style={{ cursor: isDone || activeBox.verified ? 'default' : 'pointer' }}
@@ -663,7 +718,7 @@ export default function Module2() {
                             </select>
                           )}
                         <div style={{display:'flex',alignItems:'center',gap:'8px',flexWrap:'wrap'}}>
-                          <Btn variant="outline" onClick={hardResetRfid}>▶ Nova leitura</Btn>
+                          {!testMode && <Btn variant="outline" onClick={hardResetRfid}>▶ Nova leitura</Btn>}
                           <span style={{
                             fontSize:'12px', fontWeight:500,
                             color: rfidStatus==='reading' ? '#16a34a' : rfidStatus==='stopped' ? '#d97706' : 'var(--text3)'
@@ -674,7 +729,7 @@ export default function Module2() {
                           <Btn
                             variant={currentQty >= activeItem.qty_expected ? 'success' : 'primary'}
                             onClick={validateItem}
-                            disabled={currentQty === 0}
+                            disabled={!canValidateActiveItem}
                           >
                             {currentQty >= activeItem.qty_expected ? '✓ Confirmar artigo' : 'Aceitar com incidência'}
                           </Btn>

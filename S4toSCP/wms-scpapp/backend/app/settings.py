@@ -1,3 +1,5 @@
+from typing import Optional
+
 from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
@@ -35,6 +37,8 @@ class Settings(BaseSettings):
     RFID_ANTENNA3_ENABLED: int = 0
     RFID_ANTENNA4_ENABLED: int = 0
     RFID_BRIDGE_URL: str = "http://127.0.0.1:8003"
+    RFID_BRIDGE_TUNNEL_1_URL: Optional[str] = None
+    RFID_BRIDGE_TUNNEL_2_URL: Optional[str] = None
 
     class Config:
         env_file = ".env"

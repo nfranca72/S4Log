@@ -15,12 +15,12 @@
 }
 
 .logo {
-  padding: 0 20px 24px;
+  padding: 0 20px 22px;
   border-bottom: 1px solid var(--border);
   margin-bottom: 16px;
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: center;
+  min-height: 66px;
 }
 
 .logoMark {
@@ -77,6 +77,38 @@
 .sidebarFooter {
   padding: 16px 20px 0;
   border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.themeToggle {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface2);
+  color: var(--text2);
+  font-size: 12px;
+  transition: border-color .15s, color .15s, background .15s;
+}
+
+.themeToggle:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--surface3);
+}
+
+.themeIcon {
+  width: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
 }
 
 .version { font-size: 11px; color: var(--text3); font-family: var(--font-mono); }

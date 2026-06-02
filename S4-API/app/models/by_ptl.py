@@ -74,10 +74,12 @@ class ByPtlOrder(BaseModel):
     @field_validator("order_id", "order_obs", "customer_id", "customer_name", mode="before")
     @classmethod
     def normalize_text(cls, value: object) -> object:
+        if value is None:
+            return None
         if isinstance(value, str):
             normalized = value.strip()
             return normalized or None
-        return value
+        return str(value).strip() or None
 
 
 class ByPtlWaveRequest(BaseModel):
@@ -90,10 +92,12 @@ class ByPtlWaveRequest(BaseModel):
     @field_validator("wave_id", "wave_obs", "ptl", mode="before")
     @classmethod
     def normalize_text(cls, value: object) -> object:
+        if value is None:
+            return None
         if isinstance(value, str):
             normalized = value.strip()
             return normalized or None
-        return value
+        return str(value).strip() or None
 
 
 class ByPtlWaveResponse(BaseModel):

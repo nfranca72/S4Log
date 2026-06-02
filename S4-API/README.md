@@ -283,8 +283,12 @@ Endpoints:
 ```http
 GET /SalesSummaryMA/Companies
 GET /SalesSummaryMA/Preview?Company=NOME_EMPRESA
+GET /SalesSummaryMA/Preview?Company=NOME_EMPRESA&Date=2026-05-29
 GET /SalesSummaryMA/SendEmail?Company=NOME_EMPRESA
 GET /SalesSummaryMA/SendEmail?Company=NOME_EMPRESA&PreviewOnly=true
+GET /SalesSummaryMA/SendEmail?Company=NOME_EMPRESA&Date=2026-05-29
+GET /SalesSummaryMA/SendEmail?Company=NOME_EMPRESA&Recipients=email1@empresa.pt;email2@empresa.pt
 ```
 
 Os dados sao lidos de `dbo.DocMovsAcum`, filtrando por `COMPANY`. A connection string de vendas deve apontar para a base de dados `Ons3_Dash`.
+No `SendEmail`, o parametro `Recipients` aparece no Swagger com os emails configurados em `SALES_MA_EMAIL_RECIPIENTS` e pode ser alterado para essa chamada.

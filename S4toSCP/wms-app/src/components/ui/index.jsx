@@ -4,6 +4,7 @@ import styles from './ui.module.css'
 export function Btn({ children, variant = 'primary', disabled, onClick, loading }) {
   return (
     <button
+      type="button"
       className={`${styles.btn} ${styles[variant]}`}
       disabled={disabled || loading}
       onClick={onClick}

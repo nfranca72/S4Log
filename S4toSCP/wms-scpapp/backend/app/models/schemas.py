@@ -37,6 +37,7 @@ class CSVPreview(BaseModel):
     new_articles: int
     existing_articles: int
     warnings: list[str] = []
+    packings: Optional[list["CSVPreview"]] = None
 
 
 # ── Artigos ────────────────────────────────────────────────────────────────────
@@ -66,6 +67,7 @@ class PackingCreateRequest(BaseModel):
     csv_rows:       list[CSVRow]
     header:         CSVHeader
     escp_order_id:  Optional[int] = None
+    packings:       Optional[list["PackingCreateRequest"]] = None
 
 class PackingCreated(BaseModel):
     order_id: int
@@ -81,7 +83,9 @@ class PackingCreated(BaseModel):
 class ImportResult(BaseModel):
     items_created: int
     items_skipped: int
-    packing: PackingCreated
+    packing: Optional[PackingCreated] = None
+    packings: list[PackingCreated] = []
+    total_packings: int = 1
     warnings: list[str] = []
 
 

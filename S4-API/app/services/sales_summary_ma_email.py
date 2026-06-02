@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from html import escape
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -20,17 +20,23 @@ PERIODS = ("Ano total", "Acumulado ate mes corrente", "Mes corrente")
 PRODUCTION_TYPES = ("Prod. interna", "Prod. externa")
 
 
-def send_sales_summary_ma_email(company: str, preview_only: bool = False) -> dict[str, object]:
-    data = fetch_sales_summary_ma(company)
+def send_sales_summary_ma_email(
+    company: str,
+    preview_only: bool = False,
+    reference_date: date | None = None,
+    recipients_override: str | None = None,
+) -> dict[str, object]:
+    data = fetch_sales_summary_ma(company, reference_date=reference_date)
     html = build_sales_summary_ma_html(data)
-    subject = _subject(str(data["Company"]))
+    subject = _subject(str(data["Company"]), data["ReferenceDate"])
     email_config = sales_ma_email_config()
-    recipients = configured_recipients(email_config)
+    recipients = _parse_recipients(recipients_override) or configured_recipients(email_config)
 
     if not preview_only:
         recipients = send_html_email(
             html_content=html,
             subject=subject,
+            recipients=recipients,
             email_config=email_config,
         )
 
@@ -40,19 +46,21 @@ def send_sales_summary_ma_email(company: str, preview_only: bool = False) -> dic
         "Subject": subject,
         "Recipients": recipients,
         "PreviewOnly": preview_only,
+        "ReferenceDate": data["ReferenceDate"],
         "Data": data,
     }
 
 
-def preview_sales_summary_ma_email_html(company: str) -> str:
-    return build_sales_summary_ma_html(fetch_sales_summary_ma(company))
+def preview_sales_summary_ma_email_html(company: str, reference_date: date | None = None) -> str:
+    return build_sales_summary_ma_html(fetch_sales_summary_ma(company, reference_date=reference_date))
 
 
 def build_sales_summary_ma_html(data: dict[str, Any]) -> str:
     company = str(data["Company"])
+    reference_date = data.get("ReferenceDate") or date.today()
     html = TEMPLATE_PATH.read_text(encoding="utf-8")
     html = html.replace("{{ COMPANY }}", escape(company))
-    html = html.replace("{{ DATA_EMAIL }}", date.today().strftime("%d/%m/%Y"))
+    html = html.replace("{{ DATA_EMAIL }}", reference_date.strftime("%d/%m/%Y"))
     html = html.replace("{{ TABLE_ROWS }}", _table_rows_html(data))
     return html
 
@@ -150,8 +158,16 @@ def _double_separator_html() -> str:
     return '<table width="100%" cellpadding="0" cellspacing="0"><tr><td style="height:0; border-top:1px solid #d3d1c7; border-bottom:3px solid #d3d1c7; padding:0;"></td></tr></table>'
 
 
-def _subject(company: str) -> str:
-    return f"{settings.sales_ma_email_subject_prefix} - {company} - {datetime.now().strftime('%m/%Y')}"
+def _subject(company: str, reference_date: date) -> str:
+    return f"{settings.sales_ma_email_subject_prefix} - {company} - {reference_date.strftime('%m/%Y')}"
+
+
+def _parse_recipients(value: str | None) -> list[str]:
+    return [
+        recipient.strip()
+        for recipient in (value or "").replace(";", ",").split(",")
+        if recipient.strip()
+    ]
 
 
 def _values(values: dict[str, Any] | None) -> dict[str, Decimal]:

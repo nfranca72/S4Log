@@ -1,6 +1,7 @@
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&display=swap');
 
 :root {
+  color-scheme: dark;
   --bg:        #0f1117;
   --surface:   #181c27;
   --surface2:  #1f2436;
@@ -23,6 +24,30 @@
   /* aliases — usadas em alguns módulos */
   --text1:     #e2e8f0;
   --hover:     #1f2436;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg:        #f4f7fb;
+  --surface:   #ffffff;
+  --surface2:  #eef3f8;
+  --surface3:  #e4ebf3;
+  --border:    #d7e0eb;
+  --border2:   #c4d0dd;
+  --accent:    #2563eb;
+  --accent-h:  #1d4ed8;
+  --green:     #059669;
+  --yellow:    #b7791f;
+  --red:       #dc2626;
+  --text:      #162033;
+  --text2:     #526174;
+  --text3:     #758397;
+  --text1:     #162033;
+  --hover:     #eef3f8;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }

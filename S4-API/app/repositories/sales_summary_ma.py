@@ -126,12 +126,13 @@ ORDER BY x.PartnerName, x.PartnerId, x.Periodo, x.TipoProd
 """
 
 
-def fetch_sales_summary_ma(company: str) -> dict[str, Any]:
+def fetch_sales_summary_ma(company: str, reference_date: date | None = None) -> dict[str, Any]:
     normalized_company = company.strip()
     if not normalized_company:
         raise ValueError("Company is required")
 
-    current_month = date.today().month
+    reference_date = reference_date or date.today()
+    current_month = reference_date.month
     with sales_db_cursor() as cursor:
         cursor.execute(
             SALES_MA_TOTAL_SQL,
@@ -155,6 +156,7 @@ def fetch_sales_summary_ma(company: str) -> dict[str, Any]:
 
     return {
         "Company": normalized_company,
+        "ReferenceDate": reference_date,
         "Total": _parse_total_rows(rows_total),
         "Clients": _parse_client_rows(rows_clients),
     }

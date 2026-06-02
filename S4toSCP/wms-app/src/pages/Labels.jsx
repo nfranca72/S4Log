@@ -5,8 +5,8 @@ import styles from './Labels.module.css'
 
 const API = import.meta.env.VITE_API_URL ?? '/api'
 
-async function request(path) {
-  const res = await fetch(`${API}${path}`)
+async function request(path, options) {
+  const res = await fetch(`${API}${path}`, options)
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Erro no servidor' }))
     throw new Error(err.detail || 'Erro no servidor')
@@ -19,6 +19,7 @@ export default function Labels() {
   const [mode, setMode] = useState('item')
   const [printConfigs, setPrintConfigs] = useState([])
   const [selectedPrint, setSelectedPrint] = useState('')
+  const [printing, setPrinting] = useState(false)
 
   const [itemSearch, setItemSearch] = useState('')
   const [items, setItems] = useState([])
@@ -105,7 +106,9 @@ export default function Labels() {
     setter(prev => prev.map((row, i) => i === index ? { ...row, print_qty: qty } : row))
   }
 
-  const preparePrint = () => {
+  const preparePrint = async () => {
+    if (printing) return
+
     if (!selectedPrint) {
       toast('Seleciona a etiqueta a imprimir', 'error')
       return
@@ -114,7 +117,34 @@ export default function Labels() {
       toast('Indica pelo menos uma quantidade de etiquetas', 'error')
       return
     }
-    toast(`${totalLabels} etiqueta(s) preparadas. Falta implementar o envio para a impressora.`, 'success')
+
+    try {
+      setPrinting(true)
+      const result = await request('/labels/print', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          config_file: selectedPrint,
+          lines: rows
+            .filter(row => (parseInt(row.print_qty, 10) || 0) > 0)
+            .map(row => ({
+              item_id: row.item_id,
+              item_desc: row.item_desc || '',
+              color_id: row.color_id || '',
+              grid_id: row.grid_id || '',
+              size_id: row.size_id || '',
+              order_num: row.order_num || 0,
+              order_row: row.order_row || null,
+              print_qty: parseInt(row.print_qty, 10) || 0,
+            })),
+        }),
+      })
+      toast(`${result.labels_printed} etiqueta(s) enviadas para ${result.printer}`, 'success')
+    } catch (e) {
+      toast(e.message, 'error')
+    } finally {
+      setPrinting(false)
+    }
   }
 
   return (
@@ -251,7 +281,7 @@ export default function Labels() {
             Total preparado: {totalLabels} etiqueta(s)
           </div>
           <div className={styles.actions}>
-            <Btn variant="success" onClick={preparePrint}>Preparar impressão</Btn>
+            <Btn variant="success" onClick={preparePrint}>{printing ? 'A imprimir...' : 'Imprimir'}</Btn>
           </div>
         </Card>
       )}

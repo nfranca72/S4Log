@@ -1,8 +1,10 @@
 from fastapi import APIRouter, HTTPException, Query
 
 from app.services.business_partners import (
+    get_business_partner,
     list_active_business_partners,
     list_active_subcontractors_for_itemmaster,
+    list_business_contact_persons,
 )
 
 router = APIRouter(prefix="/BusinessPartners", tags=["BusinessPartners"])
@@ -44,4 +46,51 @@ def get_active_subcontractors_for_itemmaster(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch active subcontractors for item master: {exc}",
+        ) from exc
+
+
+@router.get(
+    "/GetById",
+    summary="Get business partner details by partner type and partner ID",
+)
+def get_business_partner_endpoint(
+    partner_type: str = Query(..., alias="PartnerType", min_length=1, max_length=5),
+    partner_id: str = Query(..., alias="PartnerID", min_length=1, max_length=50),
+) -> dict[str, object]:
+    try:
+        result = get_business_partner(
+            partner_type=partner_type,
+            partner_id=partner_id,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch business partner: {exc}",
+        ) from exc
+
+    if result is None:
+        raise HTTPException(status_code=404, detail="Business partner not found")
+
+    return result
+
+
+@router.get(
+    "/GetBusinessContactPersonList",
+    summary="List business partner contact persons",
+)
+def get_business_contact_person_list(
+    partner_type: str = Query(..., alias="PartnerType", min_length=1, max_length=5),
+    partner_id: str = Query(..., alias="PartnerID", min_length=1, max_length=50),
+    contact_id: str = Query("", alias="ContactID", max_length=100),
+) -> list[dict[str, object]]:
+    try:
+        return list_business_contact_persons(
+            partner_type=partner_type,
+            partner_id=partner_id,
+            contact_id=contact_id,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch business partner contact persons: {exc}",
         ) from exc

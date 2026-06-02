@@ -67,8 +67,8 @@ def receive_wave(payload: ByPtlWaveRequest) -> ByPtlWaveResponse:
         OrdersCreated=orders_result["orders_created"],
         OrdersUpdated=orders_result["orders_updated"],
         OrderLinesCount=order_lines_count,
-        PickingCreated=False,
-        PickingDetailsCount=0,
+        PickingCreated=orders_result["picking_created"],
+        PickingDetailsCount=orders_result["picking_details_count"],
         Message="BY-PTL wave received successfully",
     )
 

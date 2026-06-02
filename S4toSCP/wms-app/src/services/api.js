@@ -5,7 +5,13 @@ const BASE = import.meta.env.VITE_API_URL ?? '/api'
 async function request(path, options = {}) {
   const res = await fetch(`${BASE}${path}`, options)
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: 'Erro no servidor' }))
+    const text = await res.text()
+    let err
+    try {
+      err = JSON.parse(text)
+    } catch {
+      err = { detail: text || `Erro HTTP ${res.status}` }
+    }
     throw new Error(err.detail || 'Erro no servidor')
   }
   return res.json()

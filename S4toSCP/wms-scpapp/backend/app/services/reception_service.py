@@ -229,12 +229,12 @@ def confirm_box(vol_num: int, req: ConfirmBoxRequest) -> ConfirmBoxResult:
         has_incident = False
 
         item_tags_map = {}
-        for item_id, tags in (req.item_tags or {}).items():
+        for item_key, tags in (req.item_tags or {}).items():
             clean_tags = _clean_tags(tags)
             if clean_tags:
-                item_tags_map[item_id] = clean_tags
+                item_tags_map[str(item_key)] = clean_tags
         if not item_tags_map and req.rfid_tags and len(items) == 1:
-            item_tags_map[items[0][1]] = _clean_tags(req.rfid_tags)
+            item_tags_map[str(items[0][0])] = _clean_tags(req.rfid_tags)
 
         all_tags = []
         for tags in item_tags_map.values():
@@ -245,12 +245,15 @@ def confirm_box(vol_num: int, req: ConfirmBoxRequest) -> ConfirmBoxResult:
             for item_id, tags in item_tags_map.items()
         }
 
+        qty_by_line: dict[int, int] = {}
         qty_by_item: dict[str, int] = {}
+        mov_id_by_line: dict[int, int | None] = {}
         mov_id_by_item: dict[str, int | None] = {}
 
         for item in items:
             item_num = item[0]
             item_id = item[1]
+            line_key = str(item_num)
             qty_exp = int(item[3] or 0)
             color_id = item[4] or ''
             size_id = item[5] or ''
@@ -258,11 +261,15 @@ def confirm_box(vol_num: int, req: ConfirmBoxRequest) -> ConfirmBoxResult:
             doc_row = int(item[8] or 0)
             stk_unit = item[9] or 'UN'
 
-            if item_id in accepted_tags_map:
-                qty_read = len(accepted_tags_map[item_id])
+            accepted_tags = accepted_tags_map.get(line_key) or accepted_tags_map.get(str(item_id))
+            if accepted_tags:
+                qty_read = len(accepted_tags)
             else:
-                qty_read = int(req.item_quantities.get(item_id, 0) or 0)
-            qty_by_item[item_id] = qty_read
+                qty_read = int(
+                    req.item_quantities.get(line_key, req.item_quantities.get(item_id, 0)) or 0
+                )
+            qty_by_line[item_num] = qty_read
+            qty_by_item[item_id] = qty_by_item.get(item_id, 0) + qty_read
 
             if qty_read != qty_exp:
                 has_incident = True
@@ -273,6 +280,7 @@ def confirm_box(vol_num: int, req: ConfirmBoxRequest) -> ConfirmBoxResult:
                 WHERE VolNum = ? AND VolItemNumber = ? AND VolDocCod = 'CX'
             """, (qty_read, vol_num, item_num))
 
+            mov_id_by_line[item_num] = None
             mov_id_by_item[item_id] = None
             if qty_read > 0:
                 cursor.execute("""
@@ -347,11 +355,14 @@ def confirm_box(vol_num: int, req: ConfirmBoxRequest) -> ConfirmBoxResult:
                     country,
                 ))
                 mov_row = cursor.fetchone()
-                mov_id_by_item[item_id] = mov_row[0] if mov_row else None
+                mov_id = mov_row[0] if mov_row else None
+                mov_id_by_line[item_num] = mov_id
+                mov_id_by_item[item_id] = mov_id
 
         if accepted_tags_map:
             item_context = {
-                item[1]: {
+                str(item[0]): {
+                    "item_id": item[1],
                     "color_id": item[4] or '',
                     "size_id": item[5] or '',
                     "country": item[6] or '',
@@ -359,10 +370,25 @@ def confirm_box(vol_num: int, req: ConfirmBoxRequest) -> ConfirmBoxResult:
                 }
                 for item in items
             }
+            item_context.update({
+                item[1]: {
+                    "item_id": item[1],
+                    "color_id": item[4] or '',
+                    "size_id": item[5] or '',
+                    "country": item[6] or '',
+                    "doc_row": int(item[8] or 0),
+                }
+                for item in items
+            })
 
-            for item_id, tags in accepted_tags_map.items():
-                ctx = item_context.get(item_id, {})
-                mov_id = mov_id_by_item.get(item_id)
+            for item_key, tags in accepted_tags_map.items():
+                ctx = item_context.get(str(item_key), {})
+                item_id = ctx.get("item_id", item_key)
+                mov_id = (
+                    mov_id_by_line.get(int(item_key))
+                    if str(item_key).isdigit()
+                    else mov_id_by_item.get(item_id)
+                )
                 for tag in tags:
                     cursor.execute("""
                         IF NOT EXISTS (SELECT 1 FROM ItemMasterRFIDTags WHERE TAG = ?)
@@ -446,7 +472,7 @@ def confirm_box(vol_num: int, req: ConfirmBoxRequest) -> ConfirmBoxResult:
         for item in items:
             item_id = item[1]
             country = item[6] or ''
-            qty_read = qty_by_item.get(item_id, 0)
+            qty_read = qty_by_line.get(item[0], 0)
             cursor.execute("""
                 UPDATE ClientOrderDetails
                 SET QtySatisf = ISNULL(QtySatisf, 0) + ?
@@ -461,7 +487,7 @@ def confirm_box(vol_num: int, req: ConfirmBoxRequest) -> ConfirmBoxResult:
             vol_num,
             order_id,
             req.escp_order_id,
-            [(i[1], qty_by_item.get(i[1], 0)) for i in items],
+            [(i[0], i[1], qty_by_line.get(i[0], 0)) for i in items],
             len(existing_tags),
         )
 
@@ -480,7 +506,7 @@ def confirm_box(vol_num: int, req: ConfirmBoxRequest) -> ConfirmBoxResult:
         if escp_order_id:
             for item in items:
                 item_id = item[1]
-                qty_remaining = qty_by_item.get(item_id, 0)
+                qty_remaining = qty_by_line.get(item[0], 0)
                 if qty_remaining <= 0:
                     continue
 

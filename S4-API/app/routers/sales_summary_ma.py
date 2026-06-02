@@ -1,3 +1,6 @@
+from datetime import date
+from typing import Optional
+
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import HTMLResponse
 
@@ -6,6 +9,7 @@ from app.services.sales_summary_ma_email import (
     preview_sales_summary_ma_email_html,
     send_sales_summary_ma_email,
 )
+from app.settings import settings
 
 router = APIRouter(prefix="/SalesSummaryMA", tags=["SalesSummaryMA"])
 
@@ -31,11 +35,19 @@ def get_sales_summary_ma_companies() -> list[str]:
 def get_send_sales_summary_ma_email(
     company: str = Query(..., alias="Company", min_length=1, max_length=100),
     preview_only: bool = Query(False, alias="PreviewOnly"),
+    reference_date: Optional[date] = Query(default=None, alias="Date"),
+    recipients: Optional[str] = Query(
+        default=settings.sales_ma_email_recipients,
+        alias="Recipients",
+        description="Emails de destino separados por ponto e virgula ou virgula.",
+    ),
 ) -> dict[str, object]:
     try:
         return send_sales_summary_ma_email(
             company=company,
             preview_only=preview_only,
+            reference_date=reference_date,
+            recipients_override=recipients,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -53,9 +65,13 @@ def get_send_sales_summary_ma_email(
 )
 def get_sales_summary_ma_email_preview(
     company: str = Query(..., alias="Company", min_length=1, max_length=100),
+    reference_date: Optional[date] = Query(default=None, alias="Date"),
 ) -> HTMLResponse:
     try:
-        return HTMLResponse(content=preview_sales_summary_ma_email_html(company=company))
+        return HTMLResponse(content=preview_sales_summary_ma_email_html(
+            company=company,
+            reference_date=reference_date,
+        ))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
