@@ -4,10 +4,12 @@ import { useToast } from '../context/ToastContext'
 import styles from './SAPB1.module.css'
 
 const integrationMeta = {
-  items: { label: 'Artigos', accent: 'blue' },
+  items: { label: 'Artigos SAP -> WMS', accent: 'blue' },
+  wms_items: { label: 'Artigos WMS -> SAP', accent: 'green' },
   partners: { label: 'Clientes e fornecedores', accent: 'amber' },
   transfers: { label: 'Transferencias de stock', accent: 'green' },
   stock_movements: { label: 'Entradas e saidas', accent: 'red' },
+  purchase_orders: { label: 'Ordens de compra', accent: 'amber' },
 }
 
 const initialConfig = {
@@ -22,12 +24,17 @@ const initialConfig = {
   wms_db_password: '',
   wms_db_driver: 'ODBC Driver 17 for SQL Server',
   interval_items: 1800,
+  interval_wms_items: 1800,
   interval_partners: 1800,
   interval_transfers: 120,
   interval_stock_movements: 120,
+  interval_purchase_orders: 120,
   sap_transfer_series: '',
   sap_goods_receipt_series: '',
   sap_goods_issue_series: '',
+  sap_purchase_order_series: '',
+  sap_purchase_order_warehouse_code: '001',
+  sap_purchase_order_line_ref_field: 'SEI_DocONS3',
 }
 
 function fmtDate(value) {
@@ -249,12 +256,17 @@ export default function SAPB1() {
       wms_db_user: config.wms_db_user,
       wms_db_driver: config.wms_db_driver,
       interval_items: Number(config.interval_items),
+      interval_wms_items: Number(config.interval_wms_items),
       interval_partners: Number(config.interval_partners),
       interval_transfers: Number(config.interval_transfers),
       interval_stock_movements: Number(config.interval_stock_movements),
+      interval_purchase_orders: Number(config.interval_purchase_orders),
       sap_transfer_series: config.sap_transfer_series,
       sap_goods_receipt_series: config.sap_goods_receipt_series,
       sap_goods_issue_series: config.sap_goods_issue_series,
+      sap_purchase_order_series: config.sap_purchase_order_series,
+      sap_purchase_order_warehouse_code: config.sap_purchase_order_warehouse_code,
+      sap_purchase_order_line_ref_field: config.sap_purchase_order_line_ref_field,
     }
 
     if (config.sap_sl_password) payload.sap_sl_password = config.sap_sl_password
@@ -379,6 +391,10 @@ export default function SAPB1() {
               <input type="number" min="10" value={config.interval_items} onChange={e => setConfig({ ...config, interval_items: e.target.value })} />
             </label>
             <label>
+              <span>Intervalo artigos WMS para SAP</span>
+              <input type="number" min="10" value={config.interval_wms_items} onChange={e => setConfig({ ...config, interval_wms_items: e.target.value })} />
+            </label>
+            <label>
               <span>Intervalo parceiros</span>
               <input type="number" min="10" value={config.interval_partners} onChange={e => setConfig({ ...config, interval_partners: e.target.value })} />
             </label>
@@ -391,6 +407,10 @@ export default function SAPB1() {
               <input type="number" min="10" value={config.interval_stock_movements} onChange={e => setConfig({ ...config, interval_stock_movements: e.target.value })} />
             </label>
             <label>
+              <span>Intervalo ordens compra</span>
+              <input type="number" min="10" value={config.interval_purchase_orders} onChange={e => setConfig({ ...config, interval_purchase_orders: e.target.value })} />
+            </label>
+            <label>
               <span>Series transferencias</span>
               <input value={config.sap_transfer_series} onChange={e => setConfig({ ...config, sap_transfer_series: e.target.value })} placeholder="1,2,3" />
             </label>
@@ -401,6 +421,18 @@ export default function SAPB1() {
             <label>
               <span>Series saidas</span>
               <input value={config.sap_goods_issue_series} onChange={e => setConfig({ ...config, sap_goods_issue_series: e.target.value })} placeholder="20,21" />
+            </label>
+            <label>
+              <span>Serie ordens compra</span>
+              <input value={config.sap_purchase_order_series} onChange={e => setConfig({ ...config, sap_purchase_order_series: e.target.value })} placeholder="30" />
+            </label>
+            <label>
+              <span>Armazem ordens compra</span>
+              <input value={config.sap_purchase_order_warehouse_code} onChange={e => setConfig({ ...config, sap_purchase_order_warehouse_code: e.target.value })} placeholder="001" />
+            </label>
+            <label>
+              <span>Campo linha SAP</span>
+              <input value={config.sap_purchase_order_line_ref_field} onChange={e => setConfig({ ...config, sap_purchase_order_line_ref_field: e.target.value })} placeholder="SEI_DocONS3" />
             </label>
             <label>
               <span>Chave de acesso</span>

@@ -15,9 +15,11 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from .config import Settings, get_settings
 from .integrations.items import ItemsIntegration
+from .integrations.wms_items import WMSItemsIntegration
 from .integrations.partners import PartnersIntegration
 from .integrations.transfers import TransfersIntegration
 from .integrations.stock_movements import StockMovementsIntegration
+from .integrations.purchase_orders import PurchaseOrdersIntegration
 from .wms.sql_server import WMSDatabase
 
 logger = logging.getLogger("scheduler")
@@ -69,6 +71,12 @@ class IntegrationScheduler:
             factory=lambda s, w: ItemsIntegration(s, w),
         )
         self._configure_job(
+            name="wms_items",
+            enabled=settings.sync_wms_items_enabled,
+            interval=settings.interval_wms_items,
+            factory=lambda s, w: WMSItemsIntegration(s, w),
+        )
+        self._configure_job(
             name="partners",
             enabled=settings.sync_partners_enabled,
             interval=settings.interval_partners,
@@ -85,6 +93,12 @@ class IntegrationScheduler:
             enabled=settings.sync_stock_movements_enabled,
             interval=settings.interval_stock_movements,
             factory=lambda s, w: StockMovementsIntegration(s, w),
+        )
+        self._configure_job(
+            name="purchase_orders",
+            enabled=settings.sync_purchase_orders_enabled,
+            interval=settings.interval_purchase_orders,
+            factory=lambda s, w: PurchaseOrdersIntegration(s, w),
         )
 
     def reload(self) -> None:
@@ -149,15 +163,19 @@ class IntegrationScheduler:
         settings = get_settings()
         interval_map = {
             "items": settings.interval_items,
+            "wms_items": settings.interval_wms_items,
             "partners": settings.interval_partners,
             "transfers": settings.interval_transfers,
             "stock_movements": settings.interval_stock_movements,
+            "purchase_orders": settings.interval_purchase_orders,
         }
         factory_map = {
             "items": lambda s, w: ItemsIntegration(s, w),
+            "wms_items": lambda s, w: WMSItemsIntegration(s, w),
             "partners": lambda s, w: PartnersIntegration(s, w),
             "transfers": lambda s, w: TransfersIntegration(s, w),
             "stock_movements": lambda s, w: StockMovementsIntegration(s, w),
+            "purchase_orders": lambda s, w: PurchaseOrdersIntegration(s, w),
         }
         self._configure_job(
             name=name,
@@ -172,9 +190,11 @@ class IntegrationScheduler:
         wms = self._wms
         factory_map = {
             "items": lambda: ItemsIntegration(settings, wms),
+            "wms_items": lambda: WMSItemsIntegration(settings, wms),
             "partners": lambda: PartnersIntegration(settings, wms),
             "transfers": lambda: TransfersIntegration(settings, wms),
             "stock_movements": lambda: StockMovementsIntegration(settings, wms),
+            "purchase_orders": lambda: PurchaseOrdersIntegration(settings, wms),
         }
         if name not in factory_map:
             raise ValueError(f"Unknown integration: {name}")

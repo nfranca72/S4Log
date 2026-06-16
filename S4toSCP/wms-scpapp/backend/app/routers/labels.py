@@ -1,13 +1,17 @@
 from __future__ import annotations
 
-import socket
-from pathlib import Path
-
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.db.connection import db_cursor
-from app.settings import settings
+from app.services.label_printing import (
+    get_document_print_config,
+    get_document_print_configs,
+    render_label_template,
+    resolve_label_template,
+    print_volume_label,
+    send_raw_to_printer,
+)
 
 router = APIRouter(prefix="/labels", tags=["Etiquetas RFID"])
 
@@ -55,6 +59,15 @@ class LabelPrintConfig(BaseModel):
     file_name: str
 
 
+class VolumeLabelReprintRequest(BaseModel):
+    config_file: str
+
+
+class VolumeLabelReprintResponse(BaseModel):
+    printed: bool
+    printer_message: str
+
+
 class LabelPrintLine(BaseModel):
     item_id: str
     item_desc: str = ""
@@ -84,6 +97,26 @@ class LabelItemPrintData(BaseModel):
     barcode: str = ""
     pvp: str = "0"
     pvp_socio: str = "0"
+
+
+def _unique_print_configs(rows: list[tuple[str, str]]) -> list[LabelPrintConfig]:
+    seen: set[str] = set()
+    configs: list[LabelPrintConfig] = []
+    for description, file_name in rows:
+        normalized_file = str(file_name or "").strip()
+        if not normalized_file:
+            continue
+        dedupe_key = normalized_file.lower()
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        configs.append(
+            LabelPrintConfig(
+                description=str(description or normalized_file).strip(),
+                file_name=normalized_file,
+            )
+        )
+    return configs
 
 
 @router.get("/items", response_model=list[LabelItem])
@@ -179,6 +212,142 @@ def _first_label_line(value: str) -> str:
 def _second_label_line(value: str) -> str:
     parts = str(value or "").strip().split()
     return " ".join(parts[2:]) if len(parts) > 2 else ""
+
+
+def _size_display_map(size_ids: list[str]) -> dict[str, str]:
+    normalized = []
+    seen = set()
+    for size_id in size_ids:
+        text = str(size_id or "").strip()
+        if not text:
+            continue
+        upper = text.upper()
+        if upper in seen:
+            continue
+        seen.add(upper)
+        normalized.append(text)
+
+    if not normalized:
+        return {}
+
+    placeholders = ",".join("?" for _ in normalized)
+    with db_cursor() as (cursor, _):
+        cursor.execute(
+            f"""
+            SELECT
+                ISNULL(SizeID, '') AS SizeID,
+                ISNULL(SizeSmallDescr, '') AS SizeSmallDescr
+            FROM Sizes
+            WHERE SizeID IN ({placeholders})
+            """,
+            normalized,
+        )
+        rows = cursor.fetchall()
+
+    display_map: dict[str, str] = {}
+    for row in rows:
+        key = str(row[0] or "").strip().upper()
+        value = str(row[1] or "").strip()
+        if key:
+            display_map[key] = value
+    return display_map
+
+
+def _barcode_display_map(lines: list["LabelPrintLine"]) -> dict[tuple[str, str, str, str], str]:
+    unique_items: list[str] = []
+    seen_items: set[str] = set()
+    variant_keys: list[tuple[str, str, str, str]] = []
+    seen_variants: set[tuple[str, str, str, str]] = set()
+
+    for line in lines:
+        item_id = str(line.item_id or "").strip()
+        if not item_id:
+            continue
+
+        item_key = item_id.upper()
+        if item_key not in seen_items:
+            seen_items.add(item_key)
+            unique_items.append(item_id)
+
+        variant_key = (
+            item_id.upper(),
+            str(line.color_id or "").strip().upper(),
+            str(line.grid_id or "").strip().upper(),
+            str(line.size_id or "").strip().upper(),
+        )
+        if variant_key not in seen_variants:
+            seen_variants.add(variant_key)
+            variant_keys.append(variant_key)
+
+    if not unique_items:
+        return {}
+
+    placeholders = ",".join("?" for _ in unique_items)
+    with db_cursor() as (cursor, _):
+        cursor.execute(
+            f"""
+            SELECT
+                ISNULL(ItemID, '') AS ItemID,
+                ISNULL(Dimensions, 0) AS Dimensions,
+                ISNULL(Barcode, '') AS Barcode
+            FROM ItemMaster
+            WHERE ItemID IN ({placeholders})
+            """,
+            unique_items,
+        )
+        item_rows = cursor.fetchall()
+
+    item_meta: dict[str, dict[str, object]] = {}
+    for row in item_rows:
+        item_meta[str(row[0] or "").strip().upper()] = {
+            "dimensions": bool(row[1]),
+            "barcode": str(row[2] or "").strip(),
+        }
+
+    dimensioned_keys = [
+        key for key in variant_keys
+        if bool(item_meta.get(key[0], {}).get("dimensions"))
+    ]
+
+    variant_barcodes: dict[tuple[str, str, str, str], str] = {}
+    if dimensioned_keys:
+        conditions = " OR ".join("(ItemID = ? AND ColorID = ? AND GridID = ? AND SizeID = ?)" for _ in dimensioned_keys)
+        params: list[str] = []
+        for item_id, color_id, grid_id, size_id in dimensioned_keys:
+            params.extend([item_id, color_id, grid_id, size_id])
+
+        with db_cursor() as (cursor, _):
+            cursor.execute(
+                f"""
+                SELECT
+                    ISNULL(ItemID, '') AS ItemID,
+                    ISNULL(ColorID, '') AS ColorID,
+                    ISNULL(GridID, '') AS GridID,
+                    ISNULL(SizeID, '') AS SizeID,
+                    ISNULL(Code, '') AS Code
+                FROM ItemMasterDim
+                WHERE {conditions}
+                """,
+                params,
+            )
+            for row in cursor.fetchall():
+                key = (
+                    str(row[0] or "").strip().upper(),
+                    str(row[1] or "").strip().upper(),
+                    str(row[2] or "").strip().upper(),
+                    str(row[3] or "").strip().upper(),
+                )
+                variant_barcodes[key] = str(row[4] or "").strip()
+
+    result: dict[tuple[str, str, str, str], str] = {}
+    for key in variant_keys:
+        item_info = item_meta.get(key[0], {})
+        fallback = str(item_info.get("barcode") or "").strip()
+        if bool(item_info.get("dimensions")):
+            result[key] = variant_barcodes.get(key) or fallback
+        else:
+            result[key] = fallback
+    return result
 
 
 @router.get("/document-types", response_model=list[LabelDocType])
@@ -310,93 +479,94 @@ def print_configs():
         """)
         rows = cursor.fetchall()
 
-    return [
-        LabelPrintConfig(description=row[0], file_name=row[1])
-        for row in rows
-    ]
+    return _unique_print_configs(rows)
+
+
+@router.get("/volume-print-configs", response_model=list[LabelPrintConfig])
+def volume_print_configs():
+    configs = get_document_print_configs("VOLUMES", "CX")
+    return _unique_print_configs([
+        (
+            str(config.get("DocPrintDescr") or config.get("DocPrintFile") or "").strip(),
+            str(config.get("DocPrintFile") or "").strip(),
+        )
+        for config in configs
+    ])
+
+
+@router.post("/volumes/{vol_num}/reprint", response_model=VolumeLabelReprintResponse)
+def reprint_volume_label(vol_num: int, req: VolumeLabelReprintRequest):
+    if not str(req.config_file or "").strip():
+        raise HTTPException(status_code=400, detail="Seleciona o tipo de etiqueta da caixa")
+
+    result = print_volume_label(
+        vol_num,
+        config_file=req.config_file,
+        require_direct_print=False,
+    )
+    if not result["printed"]:
+        raise HTTPException(status_code=400, detail=str(result["message"] or "Nao foi possivel reimprimir a etiqueta"))
+
+    return VolumeLabelReprintResponse(
+        printed=True,
+        printer_message=str(result["message"] or ""),
+    )
 
 
 @router.post("/print", response_model=LabelPrintResponse)
 def print_labels(req: LabelPrintRequest):
-    printer_ip = (settings.ZEBRA_PRINTER_IP or "").strip()
-    if not printer_ip or printer_ip == "0.0.0.0":
-        raise HTTPException(
-            status_code=400,
-            detail="Configura ZEBRA_PRINTER_IP no .env com o IP da impressora Zebra",
-        )
+    config = get_document_print_config("ETIQ", "ETIQ", config_file=req.config_file)
+    if not config:
+        raise HTTPException(status_code=400, detail="Configuracao de impressao nao encontrada para a etiqueta selecionada")
+
+    printer_name = str(config.get("PrinterName") or "").strip()
+    if not printer_name:
+        raise HTTPException(status_code=400, detail="PrinterName nao configurado em DocumentPrintConfig para esta etiqueta")
 
     printable_lines = [line for line in req.lines if line.print_qty > 0]
     total_labels = sum(line.print_qty for line in printable_lines)
     if not printable_lines or total_labels <= 0:
         raise HTTPException(status_code=400, detail="Indica pelo menos uma quantidade de etiquetas")
 
-    template_path = _resolve_label_template(req.config_file)
+    template_path = resolve_label_template(req.config_file)
     template = template_path.read_text(encoding="utf-8-sig")
 
     item_data = {line.item_id: item_print_data(line.item_id) for line in printable_lines}
+    size_display_map = _size_display_map([line.size_id for line in printable_lines])
+    barcode_display_map = _barcode_display_map(printable_lines)
     zpl_parts: list[str] = []
     for line in printable_lines:
         data = item_data[line.item_id]
+        size_display = size_display_map.get(str(line.size_id or "").strip().upper()) or line.size_id
+        barcode_key = (
+            str(line.item_id or "").strip().upper(),
+            str(line.color_id or "").strip().upper(),
+            str(line.grid_id or "").strip().upper(),
+            str(line.size_id or "").strip().upper(),
+        )
+        barcode_display = barcode_display_map.get(barcode_key) or data.barcode or line.item_id
         values = {
             "ITEM_ID": line.item_id,
             "ITEM_DESC": data.item_desc or line.item_desc,
             "ITEM_SUBDESC": data.item_subdesc,
             "CLIENT_REF": data.client_ref,
-            "BARCODE": data.barcode or line.item_id,
+            "BARCODE": barcode_display,
             "PVP": data.pvp,
             "PVP_SOCIO": data.pvp_socio,
             "COLOR": line.color_id,
             "GRID": line.grid_id,
-            "SIZE": line.size_id,
+            "SIZE": size_display,
         }
-        rendered = _render_label_template(template, values)
+        rendered = render_label_template(template, values)
         zpl_parts.extend(rendered for _ in range(line.print_qty))
 
-    payload = "\n".join(zpl_parts).encode("utf-8")
+    payload = "\n".join(zpl_parts)
     try:
-        with socket.create_connection((printer_ip, settings.ZEBRA_PRINTER_PORT), timeout=8) as sock:
-            sock.sendall(payload)
-    except OSError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Nao foi possivel enviar para a impressora {printer_ip}:{settings.ZEBRA_PRINTER_PORT}: {exc}",
-        ) from exc
+        send_raw_to_printer(printer_name, payload)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     return LabelPrintResponse(
         labels_printed=total_labels,
-        printer=f"{printer_ip}:{settings.ZEBRA_PRINTER_PORT}",
+        printer=printer_name,
     )
-
-
-def _resolve_label_template(file_name: str) -> Path:
-    requested = Path(file_name.strip())
-    if not requested.name or requested.is_absolute() or ".." in requested.parts:
-        raise HTTPException(status_code=400, detail="Ficheiro de etiqueta invalido")
-
-    template_dir = Path(settings.LABEL_TEMPLATE_DIR)
-    if not template_dir.is_absolute():
-        template_dir = Path.cwd() / template_dir
-    template_dir = template_dir.resolve()
-
-    candidates = [template_dir / requested]
-    if not requested.suffix:
-        candidates.extend(template_dir / f"{requested.name}{suffix}" for suffix in (".zpl", ".prn", ".txt"))
-
-    for candidate in candidates:
-        resolved = candidate.resolve()
-        if resolved.is_file() and template_dir in resolved.parents:
-            return resolved
-
-    raise HTTPException(status_code=404, detail=f"Template de etiqueta nao encontrado: {file_name}")
-
-
-def _render_label_template(template: str, values: dict[str, object]) -> str:
-    rendered = template
-    for key, value in values.items():
-        rendered = rendered.replace(f"{{{{{key}}}}}", _zpl_field_value(value))
-    return rendered
-
-
-def _zpl_field_value(value: object) -> str:
-    text = "" if value is None else str(value)
-    return text.replace("^", " ").replace("~", " ").strip()

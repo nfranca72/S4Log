@@ -4,6 +4,12 @@
   overflow: hidden;
 }
 
+.mobileMenuButton,
+.mobileCloseButton,
+.mobileBackdrop {
+  display: none;
+}
+
 .sidebar {
   width: 220px;
   flex-shrink: 0;
@@ -12,6 +18,7 @@
   display: flex;
   flex-direction: column;
   padding: 24px 0;
+  z-index: 20;
 }
 
 .logo {
@@ -20,6 +27,7 @@
   margin-bottom: 16px;
   display: flex;
   align-items: center;
+  justify-content: space-between;
   min-height: 66px;
 }
 
@@ -117,4 +125,90 @@
   flex: 1;
   overflow-y: auto;
   padding: 32px;
+}
+
+@media (max-width: 900px) {
+  .shell {
+    display: block;
+    height: auto;
+    min-height: 100vh;
+  }
+
+  .mobileMenuButton {
+    position: fixed;
+    top: 14px;
+    left: 14px;
+    z-index: 30;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 42px;
+    height: 42px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--surface) 88%, transparent);
+    color: var(--text);
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
+    backdrop-filter: blur(10px);
+  }
+
+  .mobileBackdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 15;
+    display: block;
+    border: 0;
+    background: rgba(7, 10, 18, 0.42);
+  }
+
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: min(82vw, 290px);
+    max-width: 290px;
+    transform: translateX(-100%);
+    transition: transform .22s ease;
+    box-shadow: 18px 0 40px rgba(0, 0, 0, 0.24);
+    overflow-y: auto;
+  }
+
+  .sidebarOpen {
+    transform: translateX(0);
+  }
+
+  .mobileCloseButton {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface2);
+    color: var(--text2);
+    font-size: 22px;
+    line-height: 1;
+    flex-shrink: 0;
+  }
+
+  .nav {
+    gap: 6px;
+    padding: 0 14px;
+  }
+
+  .navItem {
+    padding: 12px 14px;
+    font-size: 14px;
+  }
+
+  .sidebarFooter {
+    padding: 16px 14px 18px;
+  }
+
+  .main {
+    min-height: 100vh;
+    padding: 68px 16px 20px;
+  }
 }

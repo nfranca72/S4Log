@@ -5,6 +5,7 @@ from app.models.schemas import (
     WarehouseInfo, LocationInfo, ConfirmBoxRequest, ConfirmBoxResult,
     CancelBoxConfirmationResult
 )
+from app.services.label_printing import print_volume_label
 
 
 def _clean_tags(tags: list[str]) -> list[str]:
@@ -203,6 +204,7 @@ def confirm_box(vol_num: int, req: ConfirmBoxRequest) -> ConfirmBoxResult:
     Confirma uma caixa apos conferencia.
     As TAGs ja existentes em ItemMasterRFIDTags nao contam para nova entrada.
     """
+    result_payload: dict[str, object] | None = None
     with db_cursor() as (cursor, conn):
         cursor.execute("""
             SELECT vi.VolItemNumber, vi.ItemID, vi.ItemQty, vi.ItemQtyIni,
@@ -550,12 +552,36 @@ def confirm_box(vol_num: int, req: ConfirmBoxRequest) -> ConfirmBoxResult:
                     if qty_remaining <= 0:
                         break
 
-        return ConfirmBoxResult(
-            success=True,
-            has_incident=has_incident,
-            message='CAIXA COM INCIDENCIAS' if has_incident else 'CONFERIDA',
-            order_id=order_id,
-        )
+        result_payload = {
+            "success": True,
+            "has_incident": has_incident,
+            "message": 'CAIXA COM INCIDENCIAS' if has_incident else 'CONFERIDA',
+            "order_id": order_id,
+        }
+
+    print_result = {
+        "attempted": False,
+        "printed": False,
+        "message": "",
+    }
+    try:
+        print_result = print_volume_label(vol_num)
+    except Exception as exc:
+        print_result = {
+            "attempted": True,
+            "printed": False,
+            "message": str(exc),
+        }
+
+    return ConfirmBoxResult(
+        success=bool(result_payload["success"]) if result_payload else False,
+        has_incident=bool(result_payload["has_incident"]) if result_payload else False,
+        message=str(result_payload["message"]) if result_payload else "Erro a confirmar caixa",
+        order_id=int(result_payload["order_id"]) if result_payload and result_payload.get("order_id") is not None else None,
+        print_attempted=bool(print_result["attempted"]),
+        print_success=bool(print_result["printed"]),
+        print_message=str(print_result["message"] or ""),
+    )
 
 
 def cancel_box_confirmation(vol_num: int, expected_order_id: int | None = None) -> CancelBoxConfirmationResult:

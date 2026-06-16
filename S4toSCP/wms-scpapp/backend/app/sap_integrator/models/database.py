@@ -47,7 +47,12 @@ _SessionLocal = None
 def init_db(db_path: str) -> None:
     global _engine, _SessionLocal
     _engine = _get_engine(db_path)
-    _SessionLocal = sessionmaker(bind=_engine, autoflush=False, autocommit=False)
+    _SessionLocal = sessionmaker(
+        bind=_engine,
+        autoflush=False,
+        autocommit=False,
+        expire_on_commit=False,
+    )
     Base.metadata.create_all(_engine)
     logger.info(f"Internal SQLite DB initialised at {db_path}")
 
@@ -105,9 +110,11 @@ class Base(DeclarativeBase):
 
 class IntegrationName(str, enum.Enum):
     items = "items"
+    wms_items = "wms_items"
     partners = "partners"
     transfers = "transfers"
     stock_movements = "stock_movements"
+    purchase_orders = "purchase_orders"
 
 
 class ErrorStatus(str, enum.Enum):
@@ -177,3 +184,24 @@ class SyncState(Base):
     last_cycle_failed = Column(Integer, default=0)   # last cycle only
     status = Column(String(20), default="idle")      # idle | running | error
     current_task = Column(String(255), nullable=True)
+
+
+class PurchaseOrderSync(Base):
+    """
+    Local linkage between WMS OC documents and SAP purchase orders.
+    Used to detect changes and cancellations across scheduler runs.
+    """
+    __tablename__ = "purchase_order_sync"
+
+    local_key = Column(String(50), primary_key=True)     # e.g. OC:12345
+    local_doc_type = Column(String(20), nullable=False, index=True)
+    local_order_id = Column(Integer, nullable=False, index=True)
+    sap_doc_entry = Column(Integer, nullable=True, index=True)
+    sap_doc_num = Column(Integer, nullable=True)
+    fingerprint = Column(String(64), nullable=True)
+    status = Column(String(20), default="active", nullable=False, index=True)
+    payload = Column(Text, nullable=True)
+    last_seen_at = Column(DateTime, default=datetime.utcnow, nullable=True)
+    synced_at = Column(DateTime, default=datetime.utcnow, nullable=True)
+    cancelled_at = Column(DateTime, nullable=True)
+    last_error = Column(Text, nullable=True)

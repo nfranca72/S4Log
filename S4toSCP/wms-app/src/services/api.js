@@ -98,6 +98,27 @@ export const ordersApi = {
     }),
 }
 
+/* ── Movimentos Simplificados ── */
+export const simplMovApi = {
+  types:        ()                       => request('/simplified-movements/types'),
+  partners:     (partnerType, search='') => request(`/simplified-movements/partners?partner_type=${partnerType}&search=${encodeURIComponent(search)}`),
+  documents:    (docType, partnerId='')  => request(`/simplified-movements/documents?doc_type=${docType}&partner_id=${encodeURIComponent(partnerId)}`),
+  docLines:     (orderId, docType, withComponents=false) =>
+    request(`/simplified-movements/documents/${orderId}/lines?doc_type=${docType}&with_components=${withComponents ? 1 : 0}`),
+  itemDetails:  (itemId)                 => request(`/simplified-movements/items/${itemId}`),
+  itemDimStock: (itemId, whId)           => request(`/simplified-movements/items/${itemId}/dim-stock${whId ? `?wh_id=${whId}` : ''}`),
+  itemLots:     (itemId, whId)           => request(`/simplified-movements/items/${itemId}/lots${whId ? `?wh_id=${whId}` : ''}`),
+  itemVolumes:  (itemId, whId)           => request(`/simplified-movements/items/${itemId}/volumes${whId ? `?wh_id=${whId}` : ''}`),
+  searchItems:  (search)                 => request(`/simplified-movements/items?search=${encodeURIComponent(search)}`),
+  warehouses:   (docType='')             => request(`/simplified-movements/warehouses?doc_type=${docType}`),
+  locations:    (whId)                   => request(`/simplified-movements/warehouses/${whId}/locations`),
+  execute:      (payload)                => request('/simplified-movements/execute', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify(payload),
+  }),
+}
+
 /* ── SAP B1 Integrator ── */
 export const sapB1Api = {
   status: () => request('/sap-b1/status'),

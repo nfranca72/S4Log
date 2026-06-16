@@ -2,6 +2,7 @@
 node_modules/
 __pycache__/
 .venv/
+.venv311/
 venv/
 .DS_Store
 dist/
@@ -13,3 +14,6 @@ bin/
 obj/
 *.pyc
 *.pyo
+*.lscache
+*.db-shm
+*.db-wal

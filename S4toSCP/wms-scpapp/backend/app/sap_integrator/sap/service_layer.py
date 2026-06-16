@@ -131,6 +131,21 @@ class ServiceLayerClient:
         if resp.status_code not in (200, 204):
             raise SAPRequestError(resp.status_code, resp.text[:500])
 
+    @retry(
+        retry=retry_if_exception_type(httpx.TransportError),
+        wait=wait_exponential(multiplier=1, min=2, max=30),
+        stop=stop_after_attempt(3),
+        reraise=True,
+    )
+    async def _post(self, url: str, payload: dict | None = None) -> dict:
+        await self._ensure_session()
+        resp = await self._client.post(url, json=payload or {})
+        if resp.status_code not in (200, 201, 204):
+            raise SAPRequestError(resp.status_code, resp.text[:500])
+        if not resp.text.strip():
+            return {}
+        return resp.json()
+
     # ── High-level helpers ────────────────────────────────────────────────────
 
     async def get_collection(
@@ -203,6 +218,16 @@ class ServiceLayerClient:
         """PATCH (partial update) a single entity — used to set UDF flags."""
         url = f"{self._base_url}/{entity}({key!r})"
         await self._patch(url, payload)
+
+    async def post(self, entity: str, payload: dict) -> Dict[str, Any]:
+        """Create a new entity and return the Service Layer payload."""
+        url = f"{self._base_url}/{entity}"
+        return await self._post(url, payload)
+
+    async def action(self, entity: str, key: str | int, action_name: str) -> Dict[str, Any]:
+        """Execute a document action such as Cancel or Close."""
+        url = f"{self._base_url}/{entity}({key!r})/{action_name}"
+        return await self._post(url, {})
 
     # ── UDF flag helpers ──────────────────────────────────────────────────────
 

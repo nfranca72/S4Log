@@ -51,20 +51,27 @@ class Settings(BaseSettings):
 
     # Intervals (seconds)
     interval_items: int = 1800
+    interval_wms_items: int = 1800
     interval_partners: int = 1800
     interval_transfers: int = 120
     interval_stock_movements: int = 120
+    interval_purchase_orders: int = 120
 
     # Toggles
     sync_items_enabled: bool = False
+    sync_wms_items_enabled: bool = False
     sync_partners_enabled: bool = False
     sync_transfers_enabled: bool = False
     sync_stock_movements_enabled: bool = False
+    sync_purchase_orders_enabled: bool = False
 
     # SAP Series (comma-separated strings → parsed as lists)
     sap_transfer_series: str = ""
     sap_goods_receipt_series: str = ""
     sap_goods_issue_series: str = ""
+    sap_purchase_order_series: str = ""
+    sap_purchase_order_warehouse_code: str = "001"
+    sap_purchase_order_line_ref_field: str = "SEI_DocONS3"
 
     # Internal DB
     sqlite_db_path: str = str(DEFAULT_SQLITE_DB)

@@ -5,6 +5,15 @@ import styles from './Module2.module.css'
 
 const API = import.meta.env.VITE_API_URL ?? '/api'
 
+async function request(path, options) {
+  const res = await fetch(`${API}${path}`, options)
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Erro no servidor' }))
+    throw new Error(err.detail || 'Erro no servidor')
+  }
+  return res.json()
+}
+
 function rfidWebSocketBase() {
   const base = import.meta.env.VITE_API_URL ?? `${window.location.protocol}//${window.location.host}/api`
   return base.replace(/^http/, 'ws').replace(/\/$/, '')
@@ -47,6 +56,9 @@ export default function Module2() {
   const [locations, setLocations]   = useState([])
   const [whId, setWhId]             = useState('')
   const [locationId, setLocationId] = useState('')
+  const [labelConfigs, setLabelConfigs] = useState([])
+  const [selectedLabelConfig, setSelectedLabelConfig] = useState('')
+  const [printingLabel, setPrintingLabel] = useState(false)
 
   // ── Conference ────────────────────────────────────────────────────────────
   const [activeItem, setActiveItem] = useState(null)
@@ -64,6 +76,12 @@ export default function Module2() {
   // ── Load warehouses on mount ──────────────────────────────────────────────
   useEffect(() => {
     fetch(`${API}/warehouses`).then(r => r.json()).then(setWarehouses).catch(() => {})
+    request('/labels/volume-print-configs')
+      .then(configs => {
+        setLabelConfigs(configs)
+        setSelectedLabelConfig(configs[0]?.file_name || '')
+      })
+      .catch(() => {})
     // Focus scan input
     setTimeout(() => scanInputRef.current?.focus(), 100)
   }, [])
@@ -357,6 +375,12 @@ export default function Module2() {
 
       toast(res.has_incident ? 'Caixa confirmada com incidências' : 'Caixa conferida com sucesso',
             res.has_incident ? 'error' : 'success')
+      if (res.print_message) {
+        toast(
+          res.print_message,
+          res.print_success ? 'success' : 'error'
+        )
+      }
 
       // Reload boxes
       const boxList = await fetch(`${API}/packing/${packing.order_id}/boxes`).then(r => r.json())
@@ -414,6 +438,28 @@ export default function Module2() {
     setTimeout(() => scanInputRef.current?.focus(), 100)
   }
 
+  const reprintBoxLabel = async () => {
+    if (!activeBox) return
+    if (!selectedLabelConfig) {
+      toast('Seleciona o tipo de etiqueta da caixa', 'error')
+      return
+    }
+
+    setPrintingLabel(true)
+    try {
+      const result = await request(`/labels/volumes/${activeBox.vol_num}/reprint`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ config_file: selectedLabelConfig }),
+      })
+      toast(result.printer_message || 'Etiqueta reenviada para impressão', 'success')
+    } catch (e) {
+      toast(e.message, 'error')
+    } finally {
+      setPrintingLabel(false)
+    }
+  }
+
   // ── Packing totals ────────────────────────────────────────────────────────
   const verifiedBoxes = boxes.filter(b => b.status === 'conferida' || b.status === 'incidencia').length
   const totalQtyReceived = boxes
@@ -457,6 +503,22 @@ export default function Module2() {
             <Btn variant="primary" loading={scanning} onClick={() => handleScan(scanInput)}>
               {scanning ? '' : 'Pesquisar'}
             </Btn>
+          </div>
+          <div className={styles.topLabelField}>
+            <label>Tipo de etiqueta</label>
+            <select
+              className={styles.select}
+              value={selectedLabelConfig}
+              onChange={e => setSelectedLabelConfig(e.target.value)}
+              disabled={!labelConfigs.length}
+            >
+              <option value="">{labelConfigs.length ? 'Selecionar...' : 'Sem etiquetas configuradas'}</option>
+              {labelConfigs.map(config => (
+                <option key={config.file_name} value={config.file_name}>
+                  {config.description}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
       </Card>
@@ -581,11 +643,21 @@ export default function Module2() {
                           {activeBox.items.length} artigo(s) — Vol. {activeBox.vol_num}
                         </div>
                       </div>
-                      {activeBox.verified && (
-                        <span className={styles.verifiedBadge}>
-                          {activeBox.status.includes('INCIDENCIA') ? '⚠ Com incidências' : '✓ Conferida'}
-                        </span>
-                      )}
+                      <div className={styles.boxHeaderActions}>
+                        {activeBox.verified && (
+                          <span className={styles.verifiedBadge}>
+                            {activeBox.status.includes('INCIDENCIA') ? '⚠ Com incidências' : '✓ Conferida'}
+                          </span>
+                        )}
+                        <Btn
+                          variant="outline"
+                          loading={printingLabel}
+                          disabled={!selectedLabelConfig}
+                          onClick={reprintBoxLabel}
+                        >
+                          Reimprimir etiqueta
+                        </Btn>
+                      </div>
                     </div>
                   </Card>
 

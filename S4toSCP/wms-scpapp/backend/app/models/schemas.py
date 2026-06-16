@@ -156,6 +156,9 @@ class ConfirmBoxResult(BaseModel):
     has_incident: bool = False
     message:      str = ''
     order_id:     Optional[int] = None
+    print_attempted: bool = False
+    print_success:   bool = False
+    print_message:   str = ''
 
 
 class CancelBoxConfirmationResult(BaseModel):

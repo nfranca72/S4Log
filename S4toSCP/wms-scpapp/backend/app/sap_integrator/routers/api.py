@@ -77,26 +77,38 @@ def _build_status_payload() -> Dict[str, Any]:
     settings = get_settings()
 
     with get_session() as session:
-        states = {s.integration: s for s in session.query(SyncState).all()}
+        states = {
+            s.integration: {
+                "status": s.status,
+                "current_task": s.current_task,
+                "last_run_at": s.last_run_at.isoformat() if s.last_run_at else None,
+                "last_success_at": s.last_success_at.isoformat() if s.last_success_at else None,
+                "last_cycle_synced": s.last_cycle_synced or 0,
+                "last_cycle_failed": s.last_cycle_failed or 0,
+                "records_processed": s.records_processed or 0,
+                "records_failed": s.records_failed or 0,
+            }
+            for s in session.query(SyncState).all()
+        }
 
     error_counts = get_error_stats()
     integrations: Dict[str, Any] = {}
 
-    for name in ["items", "partners", "transfers", "stock_movements"]:
+    for name in ["items", "wms_items", "partners", "transfers", "stock_movements", "purchase_orders"]:
         db_state = states.get(name)
         live = LIVE_STATE.get(name, {})
         sched = job_status.get(name, {})
         integrations[name] = {
-            "status":            live.get("status") or (db_state.status if db_state else "idle"),
+            "status":            live.get("status") or (db_state["status"] if db_state else "idle"),
             "current_task":      live.get("current_task"),
-            "last_run_at":       db_state.last_run_at.isoformat() if db_state and db_state.last_run_at else None,
-            "last_success_at":   db_state.last_success_at.isoformat() if db_state and db_state.last_success_at else None,
+            "last_run_at":       db_state["last_run_at"] if db_state else None,
+            "last_success_at":   db_state["last_success_at"] if db_state else None,
             "next_run":          sched.get("next_run"),
             "scheduled":         sched.get("scheduled", False),
-            "last_cycle_synced": getattr(db_state, "last_cycle_synced", 0) or 0,
-            "last_cycle_failed": getattr(db_state, "last_cycle_failed", 0) or 0,
-            "total_synced":      db_state.records_processed if db_state else 0,
-            "total_failed":      db_state.records_failed if db_state else 0,
+            "last_cycle_synced": db_state["last_cycle_synced"] if db_state else 0,
+            "last_cycle_failed": db_state["last_cycle_failed"] if db_state else 0,
+            "total_synced":      db_state["records_processed"] if db_state else 0,
+            "total_failed":      db_state["records_failed"] if db_state else 0,
             "pending_errors":    error_counts.get(name, 0),
             # Read enabled state directly from env var to bypass any stale cache
             "enabled":           os.environ.get(
@@ -153,13 +165,18 @@ class ConfigUpdateRequest(BaseModel):
     wms_db_driver: Optional[str] = None
     # Intervals
     interval_items: Optional[int] = None
+    interval_wms_items: Optional[int] = None
     interval_partners: Optional[int] = None
     interval_transfers: Optional[int] = None
     interval_stock_movements: Optional[int] = None
+    interval_purchase_orders: Optional[int] = None
     # Series
     sap_transfer_series: Optional[str] = None
     sap_goods_receipt_series: Optional[str] = None
     sap_goods_issue_series: Optional[str] = None
+    sap_purchase_order_series: Optional[str] = None
+    sap_purchase_order_warehouse_code: Optional[str] = None
+    sap_purchase_order_line_ref_field: Optional[str] = None
     # Allow changing the access key itself
     config_access_key: Optional[str] = None
 
@@ -229,16 +246,23 @@ async def get_config():
         "wms_db_user":                  s.wms_db_user,
         "wms_db_driver":                s.wms_db_driver,
         "interval_items":               s.interval_items,
+        "interval_wms_items":           s.interval_wms_items,
         "interval_partners":            s.interval_partners,
         "interval_transfers":           s.interval_transfers,
         "interval_stock_movements":     s.interval_stock_movements,
+        "interval_purchase_orders":     s.interval_purchase_orders,
         "sync_items_enabled":           s.sync_items_enabled,
+        "sync_wms_items_enabled":       s.sync_wms_items_enabled,
         "sync_partners_enabled":        s.sync_partners_enabled,
         "sync_transfers_enabled":       s.sync_transfers_enabled,
         "sync_stock_movements_enabled": s.sync_stock_movements_enabled,
+        "sync_purchase_orders_enabled": s.sync_purchase_orders_enabled,
         "sap_transfer_series":          s.sap_transfer_series,
         "sap_goods_receipt_series":     s.sap_goods_receipt_series,
         "sap_goods_issue_series":       s.sap_goods_issue_series,
+        "sap_purchase_order_series":    s.sap_purchase_order_series,
+        "sap_purchase_order_warehouse_code": s.sap_purchase_order_warehouse_code,
+        "sap_purchase_order_line_ref_field": s.sap_purchase_order_line_ref_field,
     }
 
 
@@ -269,7 +293,7 @@ async def update_config(req: ConfigUpdateRequest):
 
 # ── Toggle ────────────────────────────────────────────────────────────────────
 
-VALID_INTEGRATIONS = {"items", "partners", "transfers", "stock_movements"}
+VALID_INTEGRATIONS = {"items", "wms_items", "partners", "transfers", "stock_movements", "purchase_orders"}
 
 
 @router.post("/toggle/{integration}")

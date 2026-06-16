@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { NavLink } from 'react-router-dom'
+import { NavLink, useLocation } from 'react-router-dom'
 import S4LogLogo from '../S4LogLogo'
 import styles from './Layout.module.css'
 
@@ -57,16 +57,37 @@ function IconSettings() {
   )
 }
 
+function IconArrows() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M7 16V4m0 0L3 8m4-4l4 4"/>
+      <path d="M17 8v12m0 0l4-4m-4 4l-4-4"/>
+    </svg>
+  )
+}
+
+function IconMenu() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="3" y1="6" x2="21" y2="6"/>
+      <line x1="3" y1="12" x2="21" y2="12"/>
+      <line x1="3" y1="18" x2="21" y2="18"/>
+    </svg>
+  )
+}
+
 const nav = [
-  { to: '/importacao',   label: 'Importação',    icon: <IconUpload /> },
-  { to: '/recepcao',     label: 'Receção',        icon: <IconInbox /> },
-  { to: '/consulta',     label: 'Consulta',       icon: <IconSearch /> },
-  { to: '/etiquetas',    label: 'Etiquetas RFID', icon: <IconTag /> },
-  { to: '/sap-b1',       label: 'SAP B1',         icon: <IconDatabase /> },
-  { to: '/configuracao', label: 'Configuração',   icon: <IconSettings /> },
+  { to: '/importacao',   label: 'Importação',        icon: <IconUpload /> },
+  { to: '/recepcao',     label: 'Receção',            icon: <IconInbox /> },
+  { to: '/movimentos',   label: 'Mov. Simplificados', icon: <IconArrows /> },
+  { to: '/consulta',     label: 'Consulta',           icon: <IconSearch /> },
+  { to: '/etiquetas',    label: 'Etiquetas RFID',     icon: <IconTag /> },
+  { to: '/sap-b1',       label: 'SAP B1',             icon: <IconDatabase /> },
+  { to: '/configuracao', label: 'Configuração',       icon: <IconSettings /> },
 ]
 
 export default function Layout({ children }) {
+  const location = useLocation()
   const [theme, setTheme] = useState(() => {
     try {
       return window.localStorage.getItem('s4log-theme') || 'dark'
@@ -74,6 +95,7 @@ export default function Layout({ children }) {
       return 'dark'
     }
   })
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
@@ -84,13 +106,62 @@ export default function Layout({ children }) {
     }
   }, [theme])
 
+  useEffect(() => {
+    setMobileMenuOpen(false)
+  }, [location.pathname])
+
+  useEffect(() => {
+    if (!mobileMenuOpen) return
+
+    const handleResize = () => {
+      if (window.innerWidth > 900) {
+        setMobileMenuOpen(false)
+      }
+    }
+
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    window.addEventListener('resize', handleResize)
+
+    return () => {
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener('resize', handleResize)
+    }
+  }, [mobileMenuOpen])
+
   const nextTheme = theme === 'dark' ? 'light' : 'dark'
 
   return (
     <div className={styles.shell}>
-      <aside className={styles.sidebar}>
+      <button
+        type="button"
+        className={styles.mobileMenuButton}
+        onClick={() => setMobileMenuOpen(true)}
+        aria-label="Abrir menu"
+      >
+        <IconMenu />
+      </button>
+
+      {mobileMenuOpen && (
+        <button
+          type="button"
+          className={styles.mobileBackdrop}
+          onClick={() => setMobileMenuOpen(false)}
+          aria-label="Fechar menu"
+        />
+      )}
+
+      <aside className={`${styles.sidebar} ${mobileMenuOpen ? styles.sidebarOpen : ''}`}>
         <div className={styles.logo}>
           <S4LogLogo variant={theme === 'light' ? 'light' : 'dark'} size="full" />
+          <button
+            type="button"
+            className={styles.mobileCloseButton}
+            onClick={() => setMobileMenuOpen(false)}
+            aria-label="Fechar menu"
+          >
+            ×
+          </button>
         </div>
         <nav className={styles.nav}>
           {nav.map(n => (
