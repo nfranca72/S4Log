@@ -20,6 +20,7 @@ from .integrations.partners import PartnersIntegration
 from .integrations.transfers import TransfersIntegration
 from .integrations.stock_movements import StockMovementsIntegration
 from .integrations.purchase_orders import PurchaseOrdersIntegration
+from .integrations.account_balances import AccountBalancesIntegration
 from .wms.sql_server import WMSDatabase
 
 logger = logging.getLogger("scheduler")
@@ -100,6 +101,12 @@ class IntegrationScheduler:
             interval=settings.interval_purchase_orders,
             factory=lambda s, w: PurchaseOrdersIntegration(s, w),
         )
+        self._configure_job(
+            name="account_balances",
+            enabled=settings.sync_account_balances_enabled,
+            interval=settings.interval_account_balances,
+            factory=lambda s, w: AccountBalancesIntegration(s, w),
+        )
 
     def reload(self) -> None:
         """Called after config changes — re-apply all jobs."""
@@ -168,6 +175,7 @@ class IntegrationScheduler:
             "transfers": settings.interval_transfers,
             "stock_movements": settings.interval_stock_movements,
             "purchase_orders": settings.interval_purchase_orders,
+            "account_balances": settings.interval_account_balances,
         }
         factory_map = {
             "items": lambda s, w: ItemsIntegration(s, w),
@@ -176,6 +184,7 @@ class IntegrationScheduler:
             "transfers": lambda s, w: TransfersIntegration(s, w),
             "stock_movements": lambda s, w: StockMovementsIntegration(s, w),
             "purchase_orders": lambda s, w: PurchaseOrdersIntegration(s, w),
+            "account_balances": lambda s, w: AccountBalancesIntegration(s, w),
         }
         self._configure_job(
             name=name,
@@ -195,6 +204,7 @@ class IntegrationScheduler:
             "transfers": lambda: TransfersIntegration(settings, wms),
             "stock_movements": lambda: StockMovementsIntegration(settings, wms),
             "purchase_orders": lambda: PurchaseOrdersIntegration(settings, wms),
+            "account_balances": lambda: AccountBalancesIntegration(settings, wms),
         }
         if name not in factory_map:
             raise ValueError(f"Unknown integration: {name}")

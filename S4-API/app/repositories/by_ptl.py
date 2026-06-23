@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
+from uuid import uuid4
 
 from app.db.connection import db_cursor
 from app.repositories.production_control import _insert_dynamic, _table_columns
@@ -111,6 +112,7 @@ def create_or_update_customers_and_orders(
             cache=cache,
             wave_id=wave_id,
             wave_obs=wave_obs,
+            ptl=ptl,
             enc_orders=enc_orders,
         )
 
@@ -123,6 +125,151 @@ def create_or_update_customers_and_orders(
         "picking_created": picking_result["created"],
         "picking_details_count": picking_result["details_count"],
     }
+
+
+def enqueue_ptl_change(wave_id: str, ptl: str) -> dict[str, Any]:
+    now = datetime.now()
+    normalized_wave_id = str(wave_id).strip()
+    normalized_ptl = str(ptl).strip()
+    cache: dict[str, dict[str, str]] = {}
+
+    with db_cursor() as (cursor, _conn):
+        wh_id_dest, location_id_dest = _get_ptl_destination(cursor, normalized_ptl)
+        order_picking_id = _get_order_picking_id_by_wave(cursor, normalized_wave_id)
+
+        _update_wave_ptl(
+            cursor=cursor,
+            cache=cache,
+            order_picking_id=order_picking_id,
+            ptl=normalized_ptl,
+            wh_id_dest=wh_id_dest,
+            location_id_dest=location_id_dest,
+            now=now,
+        )
+
+        sync_id = str(uuid4())
+        values: dict[str, Any] = {
+            "SyncID": sync_id,
+            "Area": "PTL_CHANGE",
+            "RequestDate": now,
+            "SyncStarted": 0,
+            "SyncEnded": 0,
+            "SyncSucceeded": 0,
+            "SyncError": 0,
+            "SyncResponse": "",
+            "Priority": 0,
+            "Async": 1,
+            "Field01": str(order_picking_id),
+            "Field02": normalized_ptl,
+            "CreationUser": "BY-PTL",
+            "CreationDateTime": now,
+            "created_by": "BY-PTL",
+            "created_date": now,
+        }
+        _fill_required_table_defaults(
+            cursor=cursor,
+            table_name="SyncQueue",
+            values=values,
+            now=now,
+        )
+        _insert_dynamic(
+            cursor,
+            "SyncQueue",
+            values,
+            required_columns={"Area", "Field01", "Field02"},
+            cache=cache,
+        )
+
+    return {
+        "sync_id": sync_id,
+        "order_picking_id": order_picking_id,
+        "wave_id": normalized_wave_id,
+        "ptl_id": normalized_ptl,
+    }
+
+
+def _get_order_picking_id_by_wave(cursor, wave_id: str) -> int:
+    cursor.execute(
+        """
+        SELECT TOP (1) ID
+        FROM OrdersPicking WITH (UPDLOCK, HOLDLOCK)
+        WHERE OrderPickingGroup = ?
+          AND ISNULL(deleted, 0) = 0
+        ORDER BY ID DESC
+        """,
+        (wave_id,),
+    )
+    row = cursor.fetchone()
+    if row is None:
+        raise ValueError(f"Wave '{wave_id}' was not found in OrdersPicking")
+    return int(row[0])
+
+
+def _update_wave_ptl(
+    cursor,
+    cache: dict[str, dict[str, str]],
+    order_picking_id: int,
+    ptl: str,
+    wh_id_dest: Any,
+    location_id_dest: Any,
+    now: datetime,
+) -> None:
+    order_columns = _table_columns(cursor, "ClientOrders", cache)
+    client_order_set_parts: list[str] = []
+    client_order_params: list[Any] = []
+
+    if "routeid" in order_columns:
+        client_order_set_parts.append(f"co.{order_columns['routeid']} = ?")
+        client_order_params.append(ptl)
+    if "modifdatetime" in order_columns:
+        client_order_set_parts.append(f"co.{order_columns['modifdatetime']} = ?")
+        client_order_params.append(now)
+
+    if client_order_set_parts:
+        client_order_params.append(order_picking_id)
+        cursor.execute(
+            f"""
+            UPDATE co
+            SET {', '.join(client_order_set_parts)}
+            FROM ClientOrders co
+            WHERE EXISTS (
+                SELECT 1
+                FROM OrdersPickingDetails opd WITH (NOLOCK)
+                WHERE opd.OrderID = ?
+                  AND ISNULL(opd.deleted, 0) = 0
+                  AND co.DocType = opd.DocTypeOri
+                  AND co.OrderID = opd.OrderIDOri
+            )
+            """,
+            tuple(client_order_params),
+        )
+
+    picking_columns = _table_columns(cursor, "OrdersPicking", cache)
+    picking_values: dict[str, Any] = {
+        "WhIDDest": wh_id_dest,
+        "LocationIDDest": location_id_dest,
+        "edited_by": "BY-PTL",
+        "edited_date": now,
+    }
+    picking_set_parts: list[str] = []
+    picking_params: list[Any] = []
+    for column_name, value in picking_values.items():
+        normalized = column_name.lower()
+        if normalized not in picking_columns:
+            continue
+        picking_set_parts.append(f"{picking_columns[normalized]} = ?")
+        picking_params.append(value)
+
+    if picking_set_parts:
+        picking_params.append(order_picking_id)
+        cursor.execute(
+            f"""
+            UPDATE OrdersPicking
+            SET {', '.join(picking_set_parts)}
+            WHERE ID = ?
+            """,
+            tuple(picking_params),
+        )
 
 
 def _create_or_update_customer(
@@ -366,9 +513,11 @@ def _create_or_update_order_picking(
     cache: dict[str, dict[str, str]],
     wave_id: str,
     wave_obs: str | None,
+    ptl: str,
     enc_orders: list[dict[str, Any]],
 ) -> dict[str, object]:
     now = datetime.now()
+    wh_id_dest, location_id_dest = _get_ptl_destination(cursor, ptl)
     cursor.execute(
         """
         SELECT ID
@@ -388,6 +537,8 @@ def _create_or_update_order_picking(
             order_picking_id=order_picking_id,
             wave_id=wave_id,
             wave_obs=wave_obs,
+            wh_id_dest=wh_id_dest,
+            location_id_dest=location_id_dest,
             now=now,
         )
         cursor.execute(
@@ -406,6 +557,8 @@ def _create_or_update_order_picking(
             seq_number=seq_number,
             wave_id=wave_id,
             wave_obs=wave_obs,
+            wh_id_dest=wh_id_dest,
+            location_id_dest=location_id_dest,
             now=now,
         )
         created = True
@@ -416,6 +569,10 @@ def _create_or_update_order_picking(
         order_picking_id=order_picking_id,
         enc_orders=enc_orders,
         now=now,
+    )
+    _complete_order_picking_resume(
+        cursor=cursor,
+        order_picking_id=order_picking_id,
     )
 
     return {
@@ -431,22 +588,25 @@ def _update_order_picking_header(
     order_picking_id: int,
     wave_id: str,
     wave_obs: str | None,
+    wh_id_dest: Any,
+    location_id_dest: Any,
     now: datetime,
 ) -> None:
     columns = _table_columns(cursor, "OrdersPicking", cache)
     values: dict[str, Any] = {
+        "SeparationOrder": 1,
         "Date": now,
         "DueDate": now + timedelta(days=1),
         "Obs": wave_obs or "",
         "AssignedUser": "Ons3",
-        "WhIDDest": "2",
-        "LocationIDDest": "2A0101",
+        "WhIDDest": wh_id_dest,
+        "LocationIDDest": location_id_dest,
         "deleted": 0,
         "edited_by": None,
         "edited_date": now,
         "Shipped": 0,
         "Sync": 0,
-        "StatusID": 1,
+        "StatusID": 0,
         "AllowPickMoreQty": 1,
         "TotalShipValue": 0,
         "PickingByCart": 0,
@@ -474,6 +634,15 @@ def _update_order_picking_header(
         """,
         tuple(params),
     )
+    if "shippingclosingtime" in columns and "created_date" in columns:
+        cursor.execute(
+            f"""
+            UPDATE OrdersPicking
+            SET {columns['shippingclosingtime']} = {columns['created_date']}
+            WHERE ID = ?
+            """,
+            (order_picking_id,),
+        )
 
 
 def _insert_order_picking_header(
@@ -482,6 +651,8 @@ def _insert_order_picking_header(
     seq_number: int,
     wave_id: str,
     wave_obs: str | None,
+    wh_id_dest: Any,
+    location_id_dest: Any,
     now: datetime,
 ) -> int:
     values: dict[str, Any] = {
@@ -491,8 +662,8 @@ def _insert_order_picking_header(
         "DueDate": now + timedelta(days=1),
         "Obs": wave_obs or "",
         "AssignedUser": "Ons3",
-        "WhIDDest": "2",
-        "LocationIDDest": "2A0101",
+        "WhIDDest": wh_id_dest,
+        "LocationIDDest": location_id_dest,
         "deleted": 0,
         "deleted_by": "",
         "deleted_date": None,
@@ -503,14 +674,14 @@ def _insert_order_picking_header(
         "RouteID": "",
         "ShippingCompanyID": "",
         "ClosingTimeID": "",
-        "ShippingClosingTime": None,
+        "ShippingClosingTime": now,
         "Shipped": 0,
         "ShippedDate": None,
         "ShippedBy": "",
         "Sync": 0,
         "PKLCreated": "",
         "WhIDOri": "",
-        "StatusID": 1,
+        "StatusID": 0,
         "UrgencyStatusID": "",
         "PendingOrderPickingID": "",
         "AllowPickMoreQty": 1,
@@ -557,7 +728,7 @@ def _insert_order_picking_details(
                 "ItemID": str(line["item_id"]).strip(),
                 "Qty": qty,
                 "QtyToPick": qty,
-                "QtyPicked": 0,
+                "QtyPicked": qty,
                 "ReservedQty": 0,
                 "VolTypeID": "",
                 "QtyVols": 0,
@@ -599,6 +770,36 @@ def _insert_order_picking_details(
             )
 
     return row_number
+
+
+def _complete_order_picking_resume(cursor, order_picking_id: int) -> None:
+    cursor.execute(
+        """
+        UPDATE OrdersPickingResume
+        SET CompletedRows = TotalRows,
+            CompletedRowsGrouped = TotalRowsGrouped,
+            PickingCompletedDate = GETDATE()
+        WHERE ID = ?
+        """,
+        (order_picking_id,),
+    )
+
+
+def _get_ptl_destination(cursor, ptl: str) -> tuple[Any, Any]:
+    cursor.execute(
+        """
+        SELECT WhidDest, LocationidDest
+        FROM dbo.PTLDefinitions WITH (NOLOCK)
+        WHERE PickToLightID = ?
+        """,
+        (ptl,),
+    )
+    row = cursor.fetchone()
+    if row is None:
+        raise ValueError(
+            f"PTL '{ptl}' does not have a destination configured in PTLDefinitions"
+        )
+    return row[0], row[1]
 
 
 def _next_int_value(cursor, table_name: str, column_name: str) -> int:
@@ -770,6 +971,17 @@ def _insert_enc_order_lines(
 ) -> None:
     for line in lines:
         qty = int(line["quantity"])
+        original_price = Decimal(line.get("original_price") or 0)
+        discount = Decimal(line.get("discount") or 0)
+        supplied_final_price = line.get("final_price")
+        final_price = (
+            Decimal(supplied_final_price)
+            if supplied_final_price is not None
+            else original_price * (Decimal("1") - discount / Decimal("100"))
+        )
+        total_gross_price = original_price * qty
+        total_net_price = final_price * qty
+        total_discount_value = total_gross_price - total_net_price
         order_row = _parse_order_row(str(line["line"]).strip())
         values: dict[str, Any] = {
             "DocType": "ENC",
@@ -785,9 +997,14 @@ def _insert_enc_order_lines(
             "QtyPicked": 0,
             "QtyVols": 0,
             "Unit": "UN",
-            "UnitPrice": 0,
-            "ItemValue": 0,
-            "TotValue": 0,
+            "UnitPrice": original_price,
+            "ItemValue": final_price,
+            "TotValue": total_net_price,
+            "Descount": discount,
+            "PercDescp": discount,
+            "TotalGrossPrice": total_gross_price,
+            "TotalDiscountValue": total_discount_value,
+            "TotalNetPrice": total_net_price,
             "Status": 1,
             "ProductionStatus": "INICIAL",
             "CreationUser": "BY-PTL",

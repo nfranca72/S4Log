@@ -50,6 +50,33 @@ class WMSDatabase:
         SET IntegrationID = ?
         WHERE ItemID = ?
     """
+    ENSURE_SAP_INTEGRATION_SYNC_SQL = """
+        IF OBJECT_ID('dbo.SapIntegrationSync', 'U') IS NULL
+        BEGIN
+            CREATE TABLE dbo.SapIntegrationSync (
+                Integration varchar(50) NOT NULL,
+                SapObjectType varchar(80) NOT NULL,
+                SapKey varchar(120) NOT NULL,
+                SapDocEntry int NULL,
+                SapDocNum int NULL,
+                SapSeries varchar(20) NULL,
+                S3Reference varchar(120) NULL,
+                Status varchar(20) NOT NULL
+                    CONSTRAINT DF_SapIntegrationSync_Status DEFAULT ('synced'),
+                SyncedAt datetime NOT NULL
+                    CONSTRAINT DF_SapIntegrationSync_SyncedAt DEFAULT (GETDATE()),
+                LastError nvarchar(max) NULL,
+                CONSTRAINT PK_SapIntegrationSync
+                    PRIMARY KEY (Integration, SapObjectType, SapKey)
+            );
+            CREATE INDEX IX_SapIntegrationSync_Status
+                ON dbo.SapIntegrationSync (Status);
+            CREATE INDEX IX_SapIntegrationSync_DocEntry
+                ON dbo.SapIntegrationSync (SapObjectType, SapDocEntry);
+            CREATE INDEX IX_SapIntegrationSync_DocNum
+                ON dbo.SapIntegrationSync (SapObjectType, SapDocNum);
+        END
+    """
 
     def __init__(self, settings: Settings):
         self._conn_str = settings.wms_connection_string
@@ -168,6 +195,151 @@ class WMSDatabase:
     async def amark_item_integration(self, item_id: str, integration_id: str) -> None:
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, self.mark_item_integration, item_id, integration_id)
+
+    def ensure_sap_integration_sync_table(self) -> None:
+        with self.transaction() as cur:
+            cur.execute(self.ENSURE_SAP_INTEGRATION_SYNC_SQL)
+
+    def is_sap_integration_synced(
+        self,
+        integration: str,
+        sap_object_type: str,
+        sap_key: str,
+    ) -> bool:
+        with self.transaction() as cur:
+            cur.execute(self.ENSURE_SAP_INTEGRATION_SYNC_SQL)
+            cur.execute(
+                """
+                SELECT Status
+                FROM dbo.SapIntegrationSync
+                WHERE Integration = ?
+                  AND SapObjectType = ?
+                  AND SapKey = ?
+                """,
+                (integration, sap_object_type, sap_key),
+            )
+            row = cur.fetchone()
+            return bool(row and str(row[0]).lower() == "synced")
+
+    async def ais_sap_integration_synced(
+        self,
+        integration: str,
+        sap_object_type: str,
+        sap_key: str,
+    ) -> bool:
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None,
+            self.is_sap_integration_synced,
+            integration,
+            sap_object_type,
+            sap_key,
+        )
+
+    def mark_sap_integration_synced(
+        self,
+        integration: str,
+        sap_object_type: str,
+        sap_key: str,
+        *,
+        sap_doc_entry: int | None = None,
+        sap_doc_num: int | None = None,
+        sap_series: str | None = None,
+        s3_reference: str | None = None,
+        last_error: str | None = None,
+    ) -> None:
+        with self.transaction() as cur:
+            cur.execute(self.ENSURE_SAP_INTEGRATION_SYNC_SQL)
+            cur.execute(
+                """
+                MERGE dbo.SapIntegrationSync AS target
+                USING (
+                    SELECT
+                        ? AS Integration,
+                        ? AS SapObjectType,
+                        ? AS SapKey,
+                        ? AS SapDocEntry,
+                        ? AS SapDocNum,
+                        ? AS SapSeries,
+                        ? AS S3Reference,
+                        ? AS LastError
+                ) AS source
+                  ON target.Integration = source.Integration
+                 AND target.SapObjectType = source.SapObjectType
+                 AND target.SapKey = source.SapKey
+                WHEN MATCHED THEN
+                    UPDATE SET
+                        SapDocEntry = source.SapDocEntry,
+                        SapDocNum = source.SapDocNum,
+                        SapSeries = source.SapSeries,
+                        S3Reference = source.S3Reference,
+                        Status = 'synced',
+                        SyncedAt = GETDATE(),
+                        LastError = source.LastError
+                WHEN NOT MATCHED THEN
+                    INSERT (
+                        Integration,
+                        SapObjectType,
+                        SapKey,
+                        SapDocEntry,
+                        SapDocNum,
+                        SapSeries,
+                        S3Reference,
+                        Status,
+                        SyncedAt,
+                        LastError
+                    )
+                    VALUES (
+                        source.Integration,
+                        source.SapObjectType,
+                        source.SapKey,
+                        source.SapDocEntry,
+                        source.SapDocNum,
+                        source.SapSeries,
+                        source.S3Reference,
+                        'synced',
+                        GETDATE(),
+                        source.LastError
+                    );
+                """,
+                (
+                    integration,
+                    sap_object_type,
+                    sap_key,
+                    sap_doc_entry,
+                    sap_doc_num,
+                    sap_series,
+                    s3_reference,
+                    last_error,
+                ),
+            )
+
+    async def amark_sap_integration_synced(
+        self,
+        integration: str,
+        sap_object_type: str,
+        sap_key: str,
+        *,
+        sap_doc_entry: int | None = None,
+        sap_doc_num: int | None = None,
+        sap_series: str | None = None,
+        s3_reference: str | None = None,
+        last_error: str | None = None,
+    ) -> None:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            None,
+            lambda: self.mark_sap_integration_synced(
+                integration,
+                sap_object_type,
+                sap_key,
+                sap_doc_entry=sap_doc_entry,
+                sap_doc_num=sap_doc_num,
+                sap_series=sap_series,
+                s3_reference=s3_reference,
+                last_error=last_error,
+            ),
+        )
 
     # ── Generic upsert ────────────────────────────────────────────────────────
 

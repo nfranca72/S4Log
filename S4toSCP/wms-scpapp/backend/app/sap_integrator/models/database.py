@@ -54,7 +54,22 @@ def init_db(db_path: str) -> None:
         expire_on_commit=False,
     )
     Base.metadata.create_all(_engine)
+    _seed_default_company_sources()
     logger.info(f"Internal SQLite DB initialised at {db_path}")
+
+
+def _seed_default_company_sources() -> None:
+    with get_session() as session:
+        existing = session.get(SapCompanySource, 2)
+        if existing is None:
+            session.add(
+                SapCompanySource(
+                    empr_cod=2,
+                    empr_nome="FSM - Ind. Confecções,SA",
+                    sap_company_db="SBO_FSMPT_PROD",
+                    active=1,
+                )
+            )
 
 
 @contextmanager
@@ -115,6 +130,7 @@ class IntegrationName(str, enum.Enum):
     transfers = "transfers"
     stock_movements = "stock_movements"
     purchase_orders = "purchase_orders"
+    account_balances = "account_balances"
 
 
 class ErrorStatus(str, enum.Enum):
@@ -205,3 +221,18 @@ class PurchaseOrderSync(Base):
     synced_at = Column(DateTime, default=datetime.utcnow, nullable=True)
     cancelled_at = Column(DateTime, nullable=True)
     last_error = Column(Text, nullable=True)
+
+
+class SapCompanySource(Base):
+    """
+    SAP company databases that feed the accounting dashboard.
+    empr_cod is the business key written to Ons3_Dash.dbo.ctb.
+    """
+    __tablename__ = "sap_company_sources"
+
+    empr_cod = Column(Integer, primary_key=True)
+    empr_nome = Column(String(255), nullable=False)
+    sap_company_db = Column(String(128), nullable=False)
+    active = Column(Integer, default=1, nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)

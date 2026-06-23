@@ -13,11 +13,24 @@ from typing import List
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
+from dotenv import dotenv_values
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 ENV_FILE = BACKEND_ROOT / ".env"
 DEFAULT_SQLITE_DB = BACKEND_ROOT / "data" / "sap_integrator.db"
+
+
+def _env_value(*keys: str, default: str = "") -> str:
+    file_values = dotenv_values(ENV_FILE) if ENV_FILE.exists() else {}
+    for key in keys:
+        value = os.getenv(key)
+        if value not in (None, ""):
+            return str(value)
+        value = file_values.get(key)
+        if value not in (None, ""):
+            return str(value)
+    return default
 
 
 class Settings(BaseSettings):
@@ -28,22 +41,27 @@ class Settings(BaseSettings):
     )
 
     # SAP Service Layer
-    sap_sl_host: str = "https://localhost:50000"
-    sap_sl_company: str = ""
-    sap_sl_user: str = ""
+    sap_sl_host: str = Field(default_factory=lambda: _env_value("SAP_SL_HOST", "SAP_SL_BASE_URL", default="https://localhost:50000"))
+    sap_sl_company: str = Field(default_factory=lambda: _env_value("SAP_SL_COMPANY", "SAP_SL_COMPANY_DB"))
+    sap_sl_user: str = Field(default_factory=lambda: _env_value("SAP_SL_USER", "SAP_SL_USERNAME"))
     sap_sl_password: str = ""
     sap_sl_verify_ssl: bool = False
+    sap_sl_timeout_seconds: int = 60
+    sap_sl_location_field: str = ""
 
     # WMS SQL Server
-    wms_db_server: str = Field(default_factory=lambda: os.getenv("WMS_DB_SERVER") or os.getenv("DB_HOST", ""))
-    wms_db_name: str = Field(default_factory=lambda: os.getenv("WMS_DB_NAME") or os.getenv("DB_NAME", ""))
-    wms_db_user: str = Field(default_factory=lambda: os.getenv("WMS_DB_USER") or os.getenv("DB_USER", ""))
-    wms_db_password: str = Field(default_factory=lambda: os.getenv("WMS_DB_PASSWORD") or os.getenv("DB_PASSWORD", ""))
-    wms_db_driver: str = Field(default_factory=lambda: os.getenv("WMS_DB_DRIVER") or os.getenv("DB_DRIVER", "ODBC Driver 17 for SQL Server"))
-    wms_db_encrypt: str = Field(default_factory=lambda: os.getenv("WMS_DB_ENCRYPT") or os.getenv("DB_ENCRYPT", "no"))
+    wms_db_server: str = Field(default_factory=lambda: _env_value("WMS_DB_SERVER", "DB_HOST"))
+    wms_db_name: str = Field(default_factory=lambda: _env_value("WMS_DB_NAME", "DB_NAME"))
+    wms_db_user: str = Field(default_factory=lambda: _env_value("WMS_DB_USER", "DB_USER"))
+    wms_db_password: str = Field(default_factory=lambda: _env_value("WMS_DB_PASSWORD", "DB_PASSWORD"))
+    wms_db_driver: str = Field(default_factory=lambda: _env_value("WMS_DB_DRIVER", "DB_DRIVER", default="ODBC Driver 17 for SQL Server"))
+    wms_db_encrypt: str = Field(default_factory=lambda: _env_value("WMS_DB_ENCRYPT", "DB_ENCRYPT", default="no"))
     wms_db_trust_server_certificate: str = Field(
-        default_factory=lambda: os.getenv("WMS_DB_TRUST_SERVER_CERTIFICATE")
-        or os.getenv("DB_TRUST_SERVER_CERTIFICATE", "yes")
+        default_factory=lambda: _env_value(
+            "WMS_DB_TRUST_SERVER_CERTIFICATE",
+            "DB_TRUST_SERVER_CERTIFICATE",
+            default="yes",
+        )
     )
 
     # Integrator
@@ -56,6 +74,7 @@ class Settings(BaseSettings):
     interval_transfers: int = 120
     interval_stock_movements: int = 120
     interval_purchase_orders: int = 120
+    interval_account_balances: int = 3600
 
     # Toggles
     sync_items_enabled: bool = False
@@ -64,6 +83,7 @@ class Settings(BaseSettings):
     sync_transfers_enabled: bool = False
     sync_stock_movements_enabled: bool = False
     sync_purchase_orders_enabled: bool = False
+    sync_account_balances_enabled: bool = False
 
     # SAP Series (comma-separated strings → parsed as lists)
     sap_transfer_series: str = ""
@@ -72,6 +92,11 @@ class Settings(BaseSettings):
     sap_purchase_order_series: str = ""
     sap_purchase_order_warehouse_code: str = "001"
     sap_purchase_order_line_ref_field: str = "SEI_DocONS3"
+    sap_transfer_sync_field: str = "SEI_DocONS3"
+
+    # Accounting dashboard
+    dashboard_db_name: str = "Ons3_Dash"
+    account_balances_years: str = ""
 
     # Internal DB
     sqlite_db_path: str = str(DEFAULT_SQLITE_DB)
@@ -101,6 +126,17 @@ class Settings(BaseSettings):
             f"DRIVER={{{self.wms_db_driver}}};"
             f"SERVER={self.wms_db_server};"
             f"DATABASE={self.wms_db_name};"
+            f"UID={self.wms_db_user};"
+            f"PWD={self.wms_db_password};"
+            f"Encrypt={self.wms_db_encrypt};"
+            f"TrustServerCertificate={self.wms_db_trust_server_certificate};"
+        )
+
+    def sql_connection_string(self, database_name: str) -> str:
+        return (
+            f"DRIVER={{{self.wms_db_driver}}};"
+            f"SERVER={self.wms_db_server};"
+            f"DATABASE={database_name};"
             f"UID={self.wms_db_user};"
             f"PWD={self.wms_db_password};"
             f"Encrypt={self.wms_db_encrypt};"

@@ -50,7 +50,8 @@ class ServiceLayerClient:
 
     def __init__(self, settings: Settings):
         self._settings = settings
-        self._base_url = f"{settings.sap_sl_host}/b1s/v1"
+        host = settings.sap_sl_host.rstrip("/")
+        self._base_url = host if host.lower().endswith("/b1s/v1") else f"{host}/b1s/v1"
         self._verify_ssl = settings.sap_sl_verify_ssl
         self._client: Optional[httpx.AsyncClient] = None
         self._session_expiry: Optional[datetime] = None
@@ -60,7 +61,7 @@ class ServiceLayerClient:
     async def __aenter__(self):
         self._client = httpx.AsyncClient(
             verify=self._verify_ssl,
-            timeout=httpx.Timeout(60.0),
+            timeout=httpx.Timeout(float(self._settings.sap_sl_timeout_seconds)),
             follow_redirects=True,
         )
         await self.login()

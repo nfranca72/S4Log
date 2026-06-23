@@ -1,4 +1,7 @@
-from fastapi import APIRouter, Form, HTTPException
+from json import JSONDecodeError
+
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import ValidationError
 
 from app.models.settings import CreateUpdateUserRequest, CreateUpdateUserResponse
 from app.services.settings import create_update_new_user
@@ -11,18 +14,24 @@ router = APIRouter(prefix="/Settings", tags=["Settings"])
     summary="Create or update a user",
     response_model=CreateUpdateUserResponse,
 )
-def post_create_update_new_user(
-    user_id: str = Form(..., alias="UserId", min_length=1, max_length=40),
-    name: str = Form(..., alias="name", min_length=1, max_length=40),
-    status: str = Form(..., alias="status", min_length=1, max_length=1),
+async def post_create_update_new_user(
+    request: Request,
 ) -> CreateUpdateUserResponse:
     try:
-        payload = CreateUpdateUserRequest(
-            UserId=user_id,
-            name=name,
-            status=status,
-        )
+        content_type = request.headers.get("content-type", "").lower()
+        if "application/json" in content_type:
+            try:
+                raw_payload = await request.json()
+            except JSONDecodeError as exc:
+                raise HTTPException(status_code=422, detail="Invalid JSON body") from exc
+        else:
+            form = await request.form()
+            raw_payload = dict(form)
+
+        payload = CreateUpdateUserRequest.model_validate(raw_payload)
         return create_update_new_user(payload)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors(include_context=False)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:

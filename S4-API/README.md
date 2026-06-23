@@ -127,8 +127,33 @@ O endpoint unico da area `BY-PTL` fica disponivel em:
 POST /BY-PTL/BYPTL
 ```
 
+A area `BY-PTL` tambem aceita tipos de volume/caixa em:
+
+```http
+POST /BY-PTL/Volumes
+```
+
+Exemplo:
+
+```json
+{
+  "High": 135,
+  "VolumeType": "PAL",
+  "Long": 100,
+  "NetWeight": "500000",
+  "Width": 80
+}
+```
+
+Este payload cria ou atualiza a tabela `VolType`.
+
 Este endpoint aceita uma acao e os respetivos dados, valida o payload e reencaminha a mensagem para o endpoint unico do WMS externo.
 Se `BY_PTL_WMS_LOGIN_URL` estiver preenchido, a API faz primeiro o login no WMS com `usr_id` e `password`, reaproveita a sessao HTTP e, se existir um token no JSON de resposta, envia-o no header configurado.
+
+Nota: o evento `PTL_CHANGE` e gravado em `dbo.SyncQueue` e enviado pelo worker
+automatico da fila. Ao enfileirar o evento, a API localiza a wave em
+`OrdersPicking.OrderPickingGroup`, atualiza o PTL das encomendas associadas e
+grava `Field01=OrdersPicking.ID` e `Field02=novo PTL`.
 
 ### Exemplo `PTL_START`
 
@@ -191,6 +216,33 @@ Nota: o ultimo payload corresponde a `PACKING_LIST` e nao a `PACKED_BOX`.
   }
 }
 ```
+
+## Fila automatica BY-PTL
+
+A API consulta `dbo.SyncQueue` em intervalos definidos por
+`BY_PTL_QUEUE_POLL_SECONDS` (5 segundos por omissao). O worker e ativado por
+`BY_PTL_QUEUE_ENABLED=true` e apenas arranca quando `BY_PTL_WMS_URL` estiver
+configurado.
+
+Mapeamento dos eventos:
+
+| Area | Field01 | Field02 | Field03 |
+|---|---|---|---|
+| `PTL_START` | `OrdersPicking.ID` | - | - |
+| `PTL_CHANGE` | `OrdersPicking.ID` | Novo PTL | - |
+| `PACKING_LIST` | `OrdersPicking.ID` | Packing List ID | - |
+| `PACKED_BOX` | `OrdersPicking.ID` | `VolMaster.VolDocCod` | `VolMaster.VolNum` |
+
+O registo e reclamado atomicamente para impedir envios duplicados por workers
+concorrentes. Depois do processamento:
+
+- sucesso: `SyncEnded=1`, `SyncSucceeded=1`, `SyncError=0`;
+- erro: `SyncEnded=1`, `SyncSucceeded=0`, `SyncError=1`;
+- a resposta externa ou o diagnostico ficam em `SyncResponse`.
+
+O script [sql/by_ptl_sync_queue.sql](sql/by_ptl_sync_queue.sql) acrescenta os
+defaults necessarios a tabela existente e inclui exemplos corretos para os
+quatro eventos.
 
 ## Endpoints iniciais
 

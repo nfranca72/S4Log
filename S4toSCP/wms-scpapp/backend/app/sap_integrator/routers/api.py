@@ -33,7 +33,7 @@ from sqlalchemy import desc, text
 from ..config import Settings, get_settings, update_env_file
 from ..integrations.base import LIVE_STATE
 from ..models.database import (
-    ErrorStatus, SyncError, SyncLog, SyncState,
+    ErrorStatus, SapCompanySource, SyncError, SyncLog, SyncState,
     get_session, get_error_stats, purge_old_logs,
 )
 from ..scheduler import get_scheduler
@@ -94,7 +94,15 @@ def _build_status_payload() -> Dict[str, Any]:
     error_counts = get_error_stats()
     integrations: Dict[str, Any] = {}
 
-    for name in ["items", "wms_items", "partners", "transfers", "stock_movements", "purchase_orders"]:
+    for name in [
+        "items",
+        "wms_items",
+        "partners",
+        "transfers",
+        "stock_movements",
+        "purchase_orders",
+        "account_balances",
+    ]:
         db_state = states.get(name)
         live = LIVE_STATE.get(name, {})
         sched = job_status.get(name, {})
@@ -170,6 +178,7 @@ class ConfigUpdateRequest(BaseModel):
     interval_transfers: Optional[int] = None
     interval_stock_movements: Optional[int] = None
     interval_purchase_orders: Optional[int] = None
+    interval_account_balances: Optional[int] = None
     # Series
     sap_transfer_series: Optional[str] = None
     sap_goods_receipt_series: Optional[str] = None
@@ -177,6 +186,9 @@ class ConfigUpdateRequest(BaseModel):
     sap_purchase_order_series: Optional[str] = None
     sap_purchase_order_warehouse_code: Optional[str] = None
     sap_purchase_order_line_ref_field: Optional[str] = None
+    sap_transfer_sync_field: Optional[str] = None
+    dashboard_db_name: Optional[str] = None
+    account_balances_years: Optional[str] = None
     # Allow changing the access key itself
     config_access_key: Optional[str] = None
 
@@ -190,6 +202,14 @@ class ErrorResolveRequest(BaseModel):
 class PurgeLogsRequest(BaseModel):
     access_key: str
     days_to_keep: int = 30
+
+
+class SapCompanySourceIn(BaseModel):
+    access_key: str
+    empr_cod: int
+    empr_nome: str
+    sap_company_db: str
+    active: bool = True
 
 
 class ErrorOut(BaseModel):
@@ -251,18 +271,23 @@ async def get_config():
         "interval_transfers":           s.interval_transfers,
         "interval_stock_movements":     s.interval_stock_movements,
         "interval_purchase_orders":     s.interval_purchase_orders,
+        "interval_account_balances":    s.interval_account_balances,
         "sync_items_enabled":           s.sync_items_enabled,
         "sync_wms_items_enabled":       s.sync_wms_items_enabled,
         "sync_partners_enabled":        s.sync_partners_enabled,
         "sync_transfers_enabled":       s.sync_transfers_enabled,
         "sync_stock_movements_enabled": s.sync_stock_movements_enabled,
         "sync_purchase_orders_enabled": s.sync_purchase_orders_enabled,
+        "sync_account_balances_enabled": s.sync_account_balances_enabled,
         "sap_transfer_series":          s.sap_transfer_series,
         "sap_goods_receipt_series":     s.sap_goods_receipt_series,
         "sap_goods_issue_series":       s.sap_goods_issue_series,
         "sap_purchase_order_series":    s.sap_purchase_order_series,
         "sap_purchase_order_warehouse_code": s.sap_purchase_order_warehouse_code,
         "sap_purchase_order_line_ref_field": s.sap_purchase_order_line_ref_field,
+        "sap_transfer_sync_field":      s.sap_transfer_sync_field,
+        "dashboard_db_name":            s.dashboard_db_name,
+        "account_balances_years":       s.account_balances_years,
     }
 
 
@@ -293,7 +318,15 @@ async def update_config(req: ConfigUpdateRequest):
 
 # ── Toggle ────────────────────────────────────────────────────────────────────
 
-VALID_INTEGRATIONS = {"items", "wms_items", "partners", "transfers", "stock_movements", "purchase_orders"}
+VALID_INTEGRATIONS = {
+    "items",
+    "wms_items",
+    "partners",
+    "transfers",
+    "stock_movements",
+    "purchase_orders",
+    "account_balances",
+}
 
 
 @router.post("/toggle/{integration}")
@@ -324,6 +357,49 @@ async def run_now(integration: str):
 
 
 # ── Errors ────────────────────────────────────────────────────────────────────
+
+@router.get("/account-balances/companies")
+async def list_account_balance_companies():
+    with get_session() as session:
+        rows = (
+            session.query(SapCompanySource)
+            .order_by(SapCompanySource.empr_cod)
+            .all()
+        )
+        return [
+            {
+                "empr_cod": row.empr_cod,
+                "empr_nome": row.empr_nome,
+                "sap_company_db": row.sap_company_db,
+                "active": bool(row.active),
+            }
+            for row in rows
+        ]
+
+
+@router.post("/account-balances/companies")
+async def upsert_account_balance_company(req: SapCompanySourceIn):
+    s = get_settings()
+    if req.access_key != s.config_access_key:
+        raise HTTPException(status_code=403, detail="Chave de acesso invÃ¡lida.")
+
+    with get_session() as session:
+        row = session.get(SapCompanySource, req.empr_cod)
+        if row is None:
+            row = SapCompanySource(empr_cod=req.empr_cod)
+            session.add(row)
+        row.empr_nome = req.empr_nome.strip()
+        row.sap_company_db = req.sap_company_db.strip()
+        row.active = 1 if req.active else 0
+        row.updated_at = datetime.utcnow()
+
+    return {
+        "empr_cod": req.empr_cod,
+        "empr_nome": req.empr_nome,
+        "sap_company_db": req.sap_company_db,
+        "active": req.active,
+    }
+
 
 @router.get("/errors", response_model=List[ErrorOut])
 async def list_errors(

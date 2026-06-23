@@ -22,9 +22,21 @@ class VolumeRequest(BaseModel):
             return normalized or None
         return value
 
+    @field_validator("length", "height", "width", "net_weight", mode="before")
+    @classmethod
+    def normalize_decimal(cls, value: object) -> object:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            normalized = value.strip()
+            if not normalized:
+                return None
+            return normalized.replace(",", ".")
+        return value
+
     @field_validator("length", "height", "width", "net_weight")
     @classmethod
-    def validate_decimal_6_2(cls, value: Optional[Decimal]) -> Optional[Decimal]:
+    def validate_decimal(cls, value: Optional[Decimal]) -> Optional[Decimal]:
         if value is None:
             return None
         if value < 0:
@@ -38,12 +50,12 @@ class VolumeRequest(BaseModel):
         integer_digits = len(digits) - decimal_places
         total_digits = len(digits)
 
-        if decimal_places > 2:
-            raise ValueError("Decimal values support at most 2 decimal places")
-        if total_digits > 6:
-            raise ValueError("Decimal values support at most 6 total digits")
-        if integer_digits > 4:
-            raise ValueError("Decimal values support up to 4 integer digits with precision (6,2)")
+        if decimal_places > 3:
+            raise ValueError("Volume decimal values support at most 3 decimal places")
+        if total_digits > 12:
+            raise ValueError("Volume decimal values support at most 12 total digits")
+        if integer_digits > 9:
+            raise ValueError("Volume decimal values support up to 9 integer digits")
 
         return value
 

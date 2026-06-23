@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 import requests
 from fastapi.encoders import jsonable_encoder
 
 from app.models.by_ptl import ByPtlWaveRequest, ByPtlWaveResponse
-from app.models.by_ptl import ByPtlDispatchRequest, ByPtlDispatchResponse
+from app.models.by_ptl import ByPtlAction, ByPtlDispatchRequest, ByPtlDispatchResponse
+from app.models.by_ptl import ByPtlQueuedResponse
 from app.repositories.by_ptl import (
     create_or_update_articles,
     create_or_update_customers_and_orders,
+    enqueue_ptl_change,
 )
 from app.settings import settings
 
@@ -42,6 +44,9 @@ def receive_wave(payload: ByPtlWaveRequest) -> ByPtlWaveResponse:
                         "line": line.line,
                         "item_id": line.item_id,
                         "quantity": line.quantity,
+                        "original_price": line.original_price,
+                        "final_price": line.final_price,
+                        "discount": line.discount,
                     }
                     for line in order.detail_order
                 ],
@@ -131,6 +136,27 @@ def dispatch_to_wms(payload: ByPtlDispatchRequest) -> ByPtlDispatchResponse:
         ResponseBody=response_body,
         Message="BY-PTL message sent to WMS successfully",
     )
+
+
+def queue_or_dispatch_to_wms(
+    payload: ByPtlDispatchRequest,
+) -> Union[ByPtlDispatchResponse, ByPtlQueuedResponse]:
+    if payload.action_to_send == ByPtlAction.PTL_CHANGE:
+        result = enqueue_ptl_change(
+            wave_id=payload.validated_payload.wave_id,
+            ptl=payload.validated_payload.ptl_id,
+        )
+        return ByPtlQueuedResponse(
+            ActionRequested=payload.action,
+            ActionQueued=payload.action_to_send.value,
+            SyncID=result["sync_id"],
+            OrderPickingID=result["order_picking_id"],
+            WAVEID=result["wave_id"],
+            PTLID=result["ptl_id"],
+            Message="BY-PTL PTL_CHANGE queued successfully in SyncQueue",
+        )
+
+    return dispatch_to_wms(payload)
 
 
 def _authenticate_wms_session(session: requests.Session) -> dict[str, str]:

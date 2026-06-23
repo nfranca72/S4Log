@@ -76,13 +76,35 @@ class StockMovementsIntegration(BaseIntegration):
             entity,
             filter=filter_str,
             expand=lines_key,
-            select=f"DocNum,DocDate,Series,Comments,{lines_key}",
+            select=f"DocEntry,DocNum,DocDate,Series,Comments,{lines_key}",
         ):
             doc_num = doc.get("DocNum")
+            doc_entry = doc.get("DocEntry")
+            sap_key = str(doc_entry if doc_entry is not None else doc_num)
+            if await self._wms.ais_sap_integration_synced(self.name, entity, sap_key):
+                continue
             self._set_task(f"Processing {label} DocNum {doc_num}…")
             try:
                 await self._process_document(doc, lines_key, mov_type, qty_sign)
-                await sl.mark_synced(entity, doc_num)
+                mark_error = None
+                try:
+                    await sl.mark_synced(entity, doc_num)
+                except Exception as exc:
+                    mark_error = str(exc)
+                    self.log_warning(
+                        f"{label} {doc_num} refletido no S3, mas o SAP recusou atualizar U_WMS_Synced.",
+                        details=mark_error,
+                    )
+                await self._wms.amark_sap_integration_synced(
+                    self.name,
+                    entity,
+                    sap_key,
+                    sap_doc_entry=int(doc_entry) if doc_entry is not None else None,
+                    sap_doc_num=int(doc_num) if doc_num is not None else None,
+                    sap_series=str(doc.get("Series") or ""),
+                    s3_reference=f"S3 Stockmov {mov_type}.{doc_num}",
+                    last_error=mark_error,
+                )
                 synced += 1
                 self._inc_synced()
             except Exception as e:

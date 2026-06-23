@@ -7,7 +7,7 @@ from typing import Optional, Type, Union
 from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
 
 
-def _validate_decimal_6_2(value: Decimal) -> Decimal:
+def _validate_article_decimal(value: Decimal) -> Decimal:
     if value < 0:
         raise ValueError("Decimal values must be greater than or equal to zero")
 
@@ -19,12 +19,12 @@ def _validate_decimal_6_2(value: Decimal) -> Decimal:
     integer_digits = len(digits) - decimal_places
     total_digits = len(digits)
 
-    if decimal_places > 2:
-        raise ValueError("Decimal values support at most 2 decimal places")
-    if total_digits > 6:
-        raise ValueError("Decimal values support at most 6 total digits")
-    if integer_digits > 4:
-        raise ValueError("Decimal values support up to 4 integer digits with precision (6,2)")
+    if decimal_places > 3:
+        raise ValueError("Article decimal values support at most 3 decimal places")
+    if total_digits > 9:
+        raise ValueError("Article decimal values support at most 9 total digits")
+    if integer_digits > 6:
+        raise ValueError("Article decimal values support up to 6 integer digits")
 
     return value
 
@@ -48,19 +48,35 @@ class ByPtlArticle(BaseModel):
     @field_validator("length", "height", "width", "net_weight")
     @classmethod
     def validate_dimensions(cls, value: Decimal) -> Decimal:
-        return _validate_decimal_6_2(value)
+        return _validate_article_decimal(value)
 
 
 class ByPtlOrderLine(BaseModel):
     line: str = Field(..., alias="Line", min_length=1, max_length=10)
     item_id: str = Field(..., alias="ItemId", min_length=1, max_length=50)
     quantity: int = Field(..., alias="Quantity", ge=1, le=9999)
+    original_price: Optional[Decimal] = Field(default=None, alias="OriginalPrize", ge=0)
+    final_price: Optional[Decimal] = Field(default=None, alias="FinalPrize", ge=0)
+    discount: Optional[Decimal] = Field(default=None, alias="Discount", ge=0, le=100)
 
     @field_validator("line", "item_id", mode="before")
     @classmethod
     def normalize_text(cls, value: object) -> object:
         if isinstance(value, str):
             return value.strip()
+        return value
+
+
+    @field_validator("original_price", "final_price", "discount", mode="before")
+    @classmethod
+    def normalize_optional_decimal(cls, value: object) -> object:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            normalized = value.strip()
+            if not normalized:
+                return None
+            return normalized.replace(",", ".")
         return value
 
 
@@ -192,7 +208,6 @@ class ByPtlPickingListData(BaseModel):
             return value.strip()
         return value
 
-
 class ByPtlPackedBoxDetail(BaseModel):
     volume_row_id: str = Field(..., alias="VOLUMROWID", min_length=1, max_length=50)
     line: str = Field(..., alias="LINE", min_length=1, max_length=50)
@@ -296,4 +311,14 @@ class ByPtlDispatchResponse(BaseModel):
     http_status: int = Field(..., alias="HttpStatus")
     request_payload: dict = Field(..., alias="RequestPayload")
     response_body: str = Field(..., alias="ResponseBody")
+    message: str = Field(..., alias="Message")
+
+
+class ByPtlQueuedResponse(BaseModel):
+    action_requested: str = Field(..., alias="ActionRequested")
+    action_queued: str = Field(..., alias="ActionQueued")
+    sync_id: str = Field(..., alias="SyncID")
+    order_picking_id: int = Field(..., alias="OrderPickingID")
+    wave_id: str = Field(..., alias="WAVEID")
+    ptl_id: str = Field(..., alias="PTLID")
     message: str = Field(..., alias="Message")

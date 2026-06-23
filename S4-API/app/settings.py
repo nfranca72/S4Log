@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     by_ptl_wms_login_password_param: str = "password"
     by_ptl_wms_auth_token_header: str = "Authorization"
     by_ptl_wms_auth_token_prefix: str = "Bearer "
+    by_ptl_queue_enabled: bool = True
+    by_ptl_queue_poll_seconds: float = 5.0
 
     sales_email_smtp_server: Optional[str] = None
     sales_email_smtp_port: int = 587

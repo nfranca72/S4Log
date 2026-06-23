@@ -67,12 +67,33 @@ class PartnersIntegration(BaseIntegration):
 
             if not partner_type:
                 continue  # Skip leads
+            if await self._wms.ais_sap_integration_synced(
+                self.name,
+                "BusinessPartners",
+                str(card_code),
+            ):
+                continue
 
             self._set_task(f"Syncing partner {card_code}…")
             try:
                 mapped = self._map_partner(bp, partner_type)
                 await self._wms.aupsert("Partners", "PartnerID", card_code, mapped)
-                await sl.mark_synced("BusinessPartners", card_code)
+                mark_error = None
+                try:
+                    await sl.mark_synced("BusinessPartners", card_code)
+                except Exception as exc:
+                    mark_error = str(exc)
+                    self.log_warning(
+                        f"Parceiro {card_code} sincronizado no S3, mas o SAP recusou atualizar U_WMS_Synced.",
+                        details=mark_error,
+                    )
+                await self._wms.amark_sap_integration_synced(
+                    self.name,
+                    "BusinessPartners",
+                    str(card_code),
+                    s3_reference=str(card_code),
+                    last_error=mark_error,
+                )
                 synced += 1
                 self._inc_synced()
             except Exception as e:

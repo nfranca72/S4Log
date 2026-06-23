@@ -136,6 +136,12 @@ class WMSItemsIntegration(BaseIntegration):
                         base_item_id,
                         datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
                     )
+                    await self._wms.amark_sap_integration_synced(
+                        self.name,
+                        "Items",
+                        base_item_id,
+                        s3_reference=base_item_id,
+                    )
                     self._inc_synced()
                     self.log_info(
                         f"Artigo WMS {base_item_id} sincronizado para SAP ({len(variants)} variante(s))."

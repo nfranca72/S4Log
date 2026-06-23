@@ -217,6 +217,15 @@ class PurchaseOrdersIntegration(BaseIntegration):
 
     async def _sync_document(self, sl, doc: Dict[str, Any]) -> None:
         link = self._get_link(doc["local_key"])
+        if not link and await self._wms.ais_sap_integration_synced(
+            self.name,
+            "PurchaseOrders",
+            doc["local_key"],
+        ):
+            self.log_warning(
+                f"{doc['local_key']} ja existe em SapIntegrationSync; ignorado para evitar duplicado."
+            )
+            return
         if link and link.fingerprint == doc["fingerprint"] and link.status == "active":
             self.log_info(f"Sem alterações para {doc['doc_type']}.{doc['order_id']}.")
             return
@@ -253,6 +262,15 @@ class PurchaseOrdersIntegration(BaseIntegration):
             sap_doc_num=sap_doc_num,
             status="active",
             last_error=None,
+        )
+        await self._wms.amark_sap_integration_synced(
+            self.name,
+            "PurchaseOrders",
+            doc["local_key"],
+            sap_doc_entry=sap_doc_entry,
+            sap_doc_num=sap_doc_num,
+            sap_series=str(purchase_series or ""),
+            s3_reference=doc["local_key"],
         )
         self._inc_synced()
         self.log_info(

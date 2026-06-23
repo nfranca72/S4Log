@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Any
+from typing import Any, Optional
 
 from app.db.connection import db_cursor
 
@@ -11,7 +11,7 @@ def create_or_update_volume(
     length: Decimal,
     height: Decimal,
     width: Decimal,
-    net_weight: Decimal | None,
+    net_weight: Optional[Decimal],
     volume: Decimal,
     vol_doc_cod: str,
 ) -> dict[str, Any]:

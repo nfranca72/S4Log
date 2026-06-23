@@ -201,11 +201,28 @@ class ItemsIntegration(BaseIntegration):
             select=select_fields,
         ):
             item_code = item.get("ItemCode", "")
+            if await self._wms.ais_sap_integration_synced(self.name, "Items", str(item_code)):
+                continue
             self._set_task(f"A sincronizar artigo {item_code}…")
             try:
                 mapped = self._map_item(item)
                 await self._wms.aupsert("ITEMMASTER", "Itemid", item_code, mapped)
-                await sl.mark_synced("Items", item_code)
+                mark_error = None
+                try:
+                    await sl.mark_synced("Items", item_code)
+                except Exception as exc:
+                    mark_error = str(exc)
+                    self.log_warning(
+                        f"Artigo {item_code} sincronizado no S3, mas o SAP recusou atualizar U_WMS_Synced.",
+                        details=mark_error,
+                    )
+                await self._wms.amark_sap_integration_synced(
+                    self.name,
+                    "Items",
+                    str(item_code),
+                    s3_reference=str(item_code),
+                    last_error=mark_error,
+                )
                 synced += 1
                 self._inc_synced()
             except Exception as e:
