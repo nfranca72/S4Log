@@ -74,10 +74,9 @@ VALUES
 
 /* PACKING_LIST */
 INSERT dbo.SyncQueue
-    (Area, RequestDate, SyncStarted, SyncEnded, Field01, Field02)
+    (Area, RequestDate, SyncStarted, SyncEnded, Field01)
 VALUES
-    (N'PACKING_LIST', GETDATE(), 0, 0,
-     CONVERT(nvarchar(100), @OrdersPickingID), @PackingListID);
+    (N'PACKING_LIST', GETDATE(), 0, 0, CONVERT(nvarchar(100), @OrdersPickingID));
 
 /* PACKED_BOX */
 INSERT dbo.SyncQueue

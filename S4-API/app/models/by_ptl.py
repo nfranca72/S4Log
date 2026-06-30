@@ -29,6 +29,30 @@ def _validate_article_decimal(value: Decimal) -> Decimal:
     return value
 
 
+def _normalize_text_value(value: object, *, empty_as_none: bool = False) -> object:
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple)):
+        normalized_values = [
+            str(item).strip()
+            for item in value
+            if item is not None and str(item).strip()
+        ]
+        unique_values = list(dict.fromkeys(normalized_values))
+        if not unique_values:
+            return None if empty_as_none else ""
+        if len(unique_values) > 1:
+            raise ValueError(
+                "Multiple different values were supplied for a single text field"
+            )
+        return unique_values[0]
+    if isinstance(value, str):
+        normalized = value.strip()
+        return normalized or None if empty_as_none else normalized
+    normalized = str(value).strip()
+    return normalized or None if empty_as_none else normalized
+
+
 class ByPtlArticle(BaseModel):
     item_id: str = Field(..., alias="ItemId", min_length=1, max_length=50)
     description: str = Field(..., alias="Description", min_length=1, max_length=250)
@@ -41,9 +65,7 @@ class ByPtlArticle(BaseModel):
     @field_validator("item_id", "description", "barcode", mode="before")
     @classmethod
     def normalize_text(cls, value: object) -> object:
-        if isinstance(value, str):
-            return value.strip()
-        return value
+        return _normalize_text_value(value)
 
     @field_validator("length", "height", "width", "net_weight")
     @classmethod
@@ -62,9 +84,7 @@ class ByPtlOrderLine(BaseModel):
     @field_validator("line", "item_id", mode="before")
     @classmethod
     def normalize_text(cls, value: object) -> object:
-        if isinstance(value, str):
-            return value.strip()
-        return value
+        return _normalize_text_value(value)
 
 
     @field_validator("original_price", "final_price", "discount", mode="before")
@@ -90,12 +110,7 @@ class ByPtlOrder(BaseModel):
     @field_validator("order_id", "order_obs", "customer_id", "customer_name", mode="before")
     @classmethod
     def normalize_text(cls, value: object) -> object:
-        if value is None:
-            return None
-        if isinstance(value, str):
-            normalized = value.strip()
-            return normalized or None
-        return str(value).strip() or None
+        return _normalize_text_value(value, empty_as_none=True)
 
 
 class ByPtlWaveRequest(BaseModel):
@@ -108,12 +123,7 @@ class ByPtlWaveRequest(BaseModel):
     @field_validator("wave_id", "wave_obs", "ptl", mode="before")
     @classmethod
     def normalize_text(cls, value: object) -> object:
-        if value is None:
-            return None
-        if isinstance(value, str):
-            normalized = value.strip()
-            return normalized or None
-        return str(value).strip() or None
+        return _normalize_text_value(value, empty_as_none=True)
 
 
 class ByPtlWaveResponse(BaseModel):

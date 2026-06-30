@@ -189,7 +189,7 @@ Nota: o ultimo payload corresponde a `PACKING_LIST` e nao a `PACKED_BOX`.
   "Data": {
     "WAVEID": "WAVE-001",
     "PTLID": "PTL-01",
-    "PACKINGLISTID": "PK-001",
+    "PACKINGLISTID": "PKL.2026000010",
     "ORDERS": [
       {
         "ORDERID": "ORD-001",
@@ -230,7 +230,7 @@ Mapeamento dos eventos:
 |---|---|---|---|
 | `PTL_START` | `OrdersPicking.ID` | - | - |
 | `PTL_CHANGE` | `OrdersPicking.ID` | Novo PTL | - |
-| `PACKING_LIST` | `OrdersPicking.ID` | Packing List ID | - |
+| `PACKING_LIST` | `OrdersPicking.ID` | preenchido pelo worker com `PKL` | preenchido pelo worker com `ClientOrders.OrderID` do `PKL` |
 | `PACKED_BOX` | `OrdersPicking.ID` | `VolMaster.VolDocCod` | `VolMaster.VolNum` |
 
 O registo e reclamado atomicamente para impedir envios duplicados por workers
