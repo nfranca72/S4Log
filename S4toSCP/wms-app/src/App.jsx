@@ -10,6 +10,7 @@ import Config from './pages/Config'
 import Labels from './pages/Labels'
 import SAPB1 from './pages/SAPB1'
 import SimplifiedMovements from './pages/SimplifiedMovements'
+import Abastecimento from './pages/Abastecimento'
 
 const SPLASH_SESSION_KEY = 's4log:splash-seen'
 
@@ -43,6 +44,7 @@ export default function App() {
           <Route path="/consulta"   element={<Module3 />} />
           <Route path="/etiquetas"  element={<Labels />} />
           <Route path="/movimentos" element={<SimplifiedMovements />} />
+          <Route path="/abastecimento" element={<Abastecimento />} />
           <Route path="/sap-b1" element={<SAPB1 />} />
           <Route path="/configuracao" element={<Config />} />
         </Routes>

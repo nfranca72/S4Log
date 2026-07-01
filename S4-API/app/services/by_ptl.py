@@ -56,6 +56,7 @@ def receive_wave(payload: ByPtlWaveRequest) -> ByPtlWaveResponse:
     orders_result = create_or_update_customers_and_orders(
         wave_id=payload.wave_id,
         wave_obs=payload.wave_obs,
+        from_location=payload.from_location,
         ptl=payload.ptl,
         orders=orders_payload,
     )

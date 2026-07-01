@@ -4,7 +4,7 @@ from decimal import Decimal
 from enum import Enum
 from typing import Optional, Type, Union
 
-from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, Field, PrivateAttr, field_validator, model_validator
 
 
 def _validate_article_decimal(value: Decimal) -> Decimal:
@@ -116,11 +116,17 @@ class ByPtlOrder(BaseModel):
 class ByPtlWaveRequest(BaseModel):
     wave_id: str = Field(..., alias="WaveID", min_length=1, max_length=32)
     wave_obs: Optional[str] = Field(default=None, alias="WaveObs", max_length=250)
+    from_location: Optional[str] = Field(
+        default=None,
+        alias="FRomLocation",
+        validation_alias=AliasChoices("FRomLocation", "FromLocation"),
+        max_length=250,
+    )
     ptl: str = Field(..., alias="PTL", min_length=1, max_length=10)
     articles: list[ByPtlArticle] = Field(..., alias="Articles", min_length=1)
     orders: list[ByPtlOrder] = Field(..., alias="Orders", min_length=1)
 
-    @field_validator("wave_id", "wave_obs", "ptl", mode="before")
+    @field_validator("wave_id", "wave_obs", "from_location", "ptl", mode="before")
     @classmethod
     def normalize_text(cls, value: object) -> object:
         return _normalize_text_value(value, empty_as_none=True)

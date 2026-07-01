@@ -9,7 +9,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import clients, items, packing, reception, orders, config, consulting, labels, simplified_movements
+from app.routers import clients, items, packing, reception, orders, config, consulting, labels, simplified_movements, abastecimento
 from app.sap_integrator.lifecycle import start_integrator, stop_integrator
 from app.sap_integrator.routers.api import router as sap_integrator_router
 
@@ -55,6 +55,7 @@ routers = [
     consulting.router,
     labels.router,
     simplified_movements.router,
+    abastecimento.router,
 ]
 
 for router in routers:

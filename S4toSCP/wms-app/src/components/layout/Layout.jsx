@@ -66,6 +66,18 @@ function IconArrows() {
   )
 }
 
+function IconFactory() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 21h18" />
+      <path d="M5 21V10l5 3V10l5 3V6l4 2v13" />
+      <path d="M9 21v-4" />
+      <path d="M14 21v-3" />
+      <path d="M18 21v-5" />
+    </svg>
+  )
+}
+
 function IconMenu() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -80,6 +92,7 @@ const nav = [
   { to: '/importacao',   label: 'Importação',        icon: <IconUpload /> },
   { to: '/recepcao',     label: 'Receção',            icon: <IconInbox /> },
   { to: '/movimentos',   label: 'Mov. Simplificados', icon: <IconArrows /> },
+  { to: '/abastecimento', label: 'Abastecimento',     icon: <IconFactory /> },
   { to: '/consulta',     label: 'Consulta',           icon: <IconSearch /> },
   { to: '/etiquetas',    label: 'Etiquetas RFID',     icon: <IconTag /> },
   { to: '/sap-b1',       label: 'SAP B1',             icon: <IconDatabase /> },

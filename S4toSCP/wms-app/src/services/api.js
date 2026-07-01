@@ -119,6 +119,27 @@ export const simplMovApi = {
   }),
 }
 
+/* ── Abastecimento ── */
+export const supplyApi = {
+  partners: (docType, search = '') =>
+    request(`/abastecimento/partners?doc_type=${encodeURIComponent(docType)}&search=${encodeURIComponent(search)}`),
+  warehouses: () => request('/abastecimento/warehouses'),
+  locations: (whId) => request(`/abastecimento/warehouses/${whId}/locations`),
+  documentTypes: () => request('/abastecimento/document-types'),
+  documents: (docType, partnerId = '', search = '') =>
+    request(
+      `/abastecimento/documents?doc_type=${encodeURIComponent(docType)}&partner_id=${encodeURIComponent(partnerId)}&search=${encodeURIComponent(search)}`
+    ),
+  requirements: (payload) =>
+    request('/abastecimento/requirements', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+  volumePrintConfigs: (docType = 'CX') =>
+    request(`/abastecimento/volume-print-configs?doc_type=${encodeURIComponent(docType)}`),
+}
+
 /* ── SAP B1 Integrator ── */
 export const sapB1Api = {
   status: () => request('/sap-b1/status'),

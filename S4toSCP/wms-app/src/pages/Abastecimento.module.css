@@ -1,0 +1,351 @@
+.page {
+  max-width: 1440px;
+  margin: 0 auto;
+}
+
+.pageHeader {
+  margin-bottom: 24px;
+}
+
+.pageTitle {
+  margin: 0 0 6px;
+  font-size: 26px;
+  color: var(--text);
+}
+
+.pageDesc {
+  margin: 0;
+  color: var(--text3);
+  font-size: 14px;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.field label {
+  font-size: 11px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--text3);
+}
+
+.input,
+.select,
+.inlineInput,
+.inlineSelect {
+  width: 100%;
+  min-height: 42px;
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  padding: 0 12px;
+  font-size: 14px;
+}
+
+.inlineInput,
+.inlineSelect {
+  min-height: 36px;
+}
+
+.input:focus,
+.select:focus,
+.inlineInput:focus,
+.inlineSelect:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.pickList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.pickItem {
+  text-align: left;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text2);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  cursor: pointer;
+}
+
+.pickItemActive,
+.pickItem:hover {
+  border-color: var(--accent);
+  background: var(--surface2);
+  color: var(--text);
+}
+
+.draftList,
+.volumeGrid {
+  display: grid;
+  gap: 14px;
+}
+
+.draftItem,
+.volumeCard {
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+
+.draftItem {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: center;
+}
+
+.draftTitle,
+.volumeTitle {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.draftMeta,
+.volumeMeta,
+.cellSub,
+.groupHeader p {
+  color: var(--text3);
+  font-size: 12px;
+  margin: 0;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.tableWrap {
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table th,
+.table td {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+.table th {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--text3);
+  background: var(--surface2);
+}
+
+.table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.cellTitle {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.empty,
+.emptyCell {
+  color: var(--text3);
+  font-size: 13px;
+}
+
+.emptyCell {
+  text-align: center;
+  padding: 26px !important;
+}
+
+.volumeHeader,
+.subVolumeTop,
+.groupHeader,
+.summaryBar {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.subVolumes {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.subVolume {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  padding: 12px;
+}
+
+.allocItem {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  color: var(--text2);
+  font-size: 13px;
+}
+
+.linkDanger {
+  border: none;
+  background: transparent;
+  color: var(--red);
+  cursor: pointer;
+  padding: 0;
+}
+
+.groupBlock + .groupBlock {
+  margin-top: 18px;
+}
+
+.groupHeader {
+  margin-bottom: 12px;
+}
+
+.groupHeader h3 {
+  margin: 0 0 4px;
+  color: var(--text);
+  font-size: 16px;
+}
+
+.groupTotals {
+  display: flex;
+  gap: 14px;
+  color: var(--text2);
+  font-size: 13px;
+}
+
+.summaryBar {
+  flex-wrap: wrap;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin-bottom: 18px;
+  color: var(--text2);
+  font-size: 13px;
+}
+
+.modalOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 17, 23, .76);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 50;
+}
+
+.modal {
+  width: min(1240px, 100%);
+  max-height: 90vh;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.modalHeader,
+.modalFooter {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 18px 22px;
+  border-bottom: 1px solid var(--border);
+}
+
+.modalFooter {
+  border-bottom: none;
+  border-top: 1px solid var(--border);
+}
+
+.modalTitle {
+  margin: 0 0 4px;
+  color: var(--text);
+  font-size: 20px;
+}
+
+.modalDesc,
+.modalMeta {
+  margin: 0;
+  color: var(--text3);
+  font-size: 13px;
+}
+
+.modalClose {
+  border: none;
+  background: transparent;
+  color: var(--text3);
+  font-size: 28px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.modalTableWrap {
+  overflow: auto;
+  padding: 0 22px;
+}
+
+@media (max-width: 900px) {
+  .draftItem,
+  .volumeHeader,
+  .subVolumeTop,
+  .groupHeader,
+  .modalHeader,
+  .modalFooter {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .table th,
+  .table td {
+    padding: 10px 12px;
+  }
+
+  .modalOverlay {
+    padding: 12px;
+  }
+
+  .modalTableWrap {
+    padding: 0 12px;
+  }
+}

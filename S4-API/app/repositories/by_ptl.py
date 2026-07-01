@@ -63,6 +63,7 @@ def create_or_update_articles(articles: list[dict[str, Any]]) -> dict[str, int]:
 def create_or_update_customers_and_orders(
     wave_id: str,
     wave_obs: str | None,
+    from_location: str | None,
     ptl: str,
     orders: list[dict[str, Any]],
 ) -> dict[str, Any]:
@@ -113,6 +114,7 @@ def create_or_update_customers_and_orders(
             wave_id=wave_id,
             wave_obs=wave_obs,
             ptl=ptl,
+            from_location=from_location,
             enc_orders=enc_orders,
         )
 
@@ -514,6 +516,7 @@ def _create_or_update_order_picking(
     wave_id: str,
     wave_obs: str | None,
     ptl: str,
+    from_location: str | None,
     enc_orders: list[dict[str, Any]],
 ) -> dict[str, object]:
     now = datetime.now()
@@ -539,6 +542,7 @@ def _create_or_update_order_picking(
             wave_obs=wave_obs,
             wh_id_dest=wh_id_dest,
             location_id_dest=location_id_dest,
+            from_location=from_location,
             now=now,
         )
         cursor.execute(
@@ -559,6 +563,7 @@ def _create_or_update_order_picking(
             wave_obs=wave_obs,
             wh_id_dest=wh_id_dest,
             location_id_dest=location_id_dest,
+            from_location=from_location,
             now=now,
         )
         created = True
@@ -590,6 +595,7 @@ def _update_order_picking_header(
     wave_obs: str | None,
     wh_id_dest: Any,
     location_id_dest: Any,
+    from_location: str | None,
     now: datetime,
 ) -> None:
     columns = _table_columns(cursor, "OrdersPicking", cache)
@@ -605,6 +611,7 @@ def _update_order_picking_header(
         "edited_by": None,
         "edited_date": now,
         "Shipped": 0,
+        "ShippedBy": from_location or "",
         "Sync": 0,
         "StatusID": 0,
         "AllowPickMoreQty": 1,
@@ -653,6 +660,7 @@ def _insert_order_picking_header(
     wave_obs: str | None,
     wh_id_dest: Any,
     location_id_dest: Any,
+    from_location: str | None,
     now: datetime,
 ) -> int:
     values: dict[str, Any] = {
@@ -677,7 +685,7 @@ def _insert_order_picking_header(
         "ShippingClosingTime": now,
         "Shipped": 0,
         "ShippedDate": None,
-        "ShippedBy": "",
+        "ShippedBy": from_location or "",
         "Sync": 0,
         "PKLCreated": "",
         "WhIDOri": "",
