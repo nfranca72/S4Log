@@ -4,6 +4,23 @@ import { Card, CardTitle, Btn, Steps, Spinner } from '../components/ui'
 import styles from './SimplifiedMovements.module.css'
 
 const API = import.meta.env.VITE_API_URL ?? '/api'
+const STATION_STORAGE_KEY = 's4log_station_identifier'
+
+function stationIdentifierHeader() {
+  if (typeof window === 'undefined') return {}
+  const value = (window.localStorage.getItem(STATION_STORAGE_KEY) || '').trim()
+  return value ? { 'X-Station-Identifier': value } : {}
+}
+
+function withStationHeaders(opts = {}) {
+  return {
+    ...opts,
+    headers: {
+      ...stationIdentifierHeader(),
+      ...(opts.headers || {}),
+    },
+  }
+}
 
 function resolveApiBases() {
   const bases = [API]
@@ -30,7 +47,7 @@ async function apiFetch(path, opts = {}) {
 
   for (const base of resolveApiBases()) {
     try {
-      const res = await fetch(`${base}${path}`, opts)
+      const res = await fetch(`${base}${path}`, withStationHeaders(opts))
       if (!res.ok) {
         lastError = await readError(res)
         continue
@@ -201,6 +218,24 @@ function VolumeQtyEditor({ volume, value, onChange }) {
   )
 }
 
+function buildScopeQuery({ whOrig, locOrig, selectedBox }) {
+  const params = new URLSearchParams()
+  if (whOrig) params.set('wh_id', whOrig)
+  if (locOrig) params.set('location_id', locOrig)
+  if (selectedBox) params.set('vol_num', selectedBox)
+  const query = params.toString()
+  return query ? `?${query}` : ''
+}
+
+function matchesBoxValue(box, value) {
+  const normalized = value.trim().toLowerCase()
+  if (!normalized) return false
+  return (
+    String(box.vol_num).trim().toLowerCase() === normalized ||
+    String(box.barcode || '').trim().toLowerCase() === normalized
+  )
+}
+
 // ── Main component ─────────────────────────────────────────────────────────────
 export default function SimplifiedMovements() {
   const toast = useToast()
@@ -212,6 +247,9 @@ export default function SimplifiedMovements() {
   const [movTypes, setMovTypes]   = useState([])
   const [movType,  setMovType]    = useState(null)
   const [loadingTypes, setLoadingTypes] = useState(true)
+  const requiresPartner = !!(movType?.allow_business_partner && movType?.partner_type)
+  const hasOriginDocTypes = !!movType?.has_origin_doc_types
+  const requiresOriginDocument = !!movType?.force_orig_doc
 
   // ── Partner ───────────────────────────────────────────────────────────────────
   const [partners, setPartners]       = useState([])
@@ -258,13 +296,36 @@ export default function SimplifiedMovements() {
   const [locations,  setLocations]      = useState({ orig: [], dest: [] })
   const [whOrig,     setWhOrig]         = useState('')
   const [locOrig,    setLocOrig]        = useState('')
+  const [boxes,      setBoxes]          = useState([])
+  const [boxInput,   setBoxInput]       = useState('')
+  const [selectedBox, setSelectedBox]   = useState('')
+  const [boxItems,   setBoxItems]       = useState([])
+  const [selectedBoxItemId, setSelectedBoxItemId] = useState('')
   const [whDest,     setWhDest]         = useState('')
   const [locDest,    setLocDest]        = useState('')
   const [loadingWh,  setLoadingWh]      = useState(false)
+  const [loadingBoxes, setLoadingBoxes] = useState(false)
+  const [loadingBoxItems, setLoadingBoxItems] = useState(false)
 
   // ── Execute ───────────────────────────────────────────────────────────────────
   const [executing, setExecuting]       = useState(false)
+  const [printingLabel, setPrintingLabel] = useState(false)
   const [result,    setResult]          = useState(null)
+  const originItemId = activeItem?.item_id || ''
+  const selectedBoxData = boxes.find(box => String(box.vol_num) === String(selectedBox)) || null
+  const effectiveOriginLocation = selectedBoxData?.location_id || locOrig
+  const hasOriginScope = !!(whOrig && (effectiveOriginLocation || selectedBox))
+  const currentBoxItems = selectedBox ? boxItems : []
+  const boxItemIds = new Set(currentBoxItems.map(item => item.item_id))
+  const normalizedItemSearch = itemSearch.trim().toLowerCase()
+  const visibleFreeItems = selectedBox
+    ? currentBoxItems.filter(item => {
+        if (selectedBoxItemId && item.item_id !== selectedBoxItemId) return false
+        if (!normalizedItemSearch) return true
+        const haystack = `${item.item_id} ${item.item_desc || ''}`.toLowerCase()
+        return haystack.includes(normalizedItemSearch)
+      })
+    : freeItems.filter(item => !selectedBoxItemId || item.item_id === selectedBoxItemId)
 
   // ── Step index for Steps component ───────────────────────────────────────────
   const stepIndex = STEP_IDS.indexOf(step) + 1
@@ -316,48 +377,103 @@ export default function SimplifiedMovements() {
     if (step !== 'items') return
     setDocLines([])
     setFreeItems([])
-    setActiveItem(null)
+
+    if (!whOrig) return
 
     if (document && movType) {
       setLoadingLines(true)
+      const scopeQuery = buildScopeQuery({ whOrig, locOrig, selectedBox })
       apiFetch(
-        `/simplified-movements/documents/${document.order_id}/lines?doc_type=${movType.doc_type}&with_components=${movType.has_components ? 1 : 0}`
+        `/simplified-movements/documents/${document.order_id}/lines${scopeQuery ? `${scopeQuery}&` : '?'}doc_type=${document.doc_type}&with_components=${movType.has_components ? 1 : 0}`
       )
-        .then(setDocLines)
+        .then(rows => setDocLines(selectedBox ? rows.filter(r => boxItemIds.has(r.item_id)) : rows))
         .catch(() => toast('Erro ao carregar linhas', 'error'))
         .finally(() => setLoadingLines(false))
     }
-  }, [step, document, movType])
+  }, [step, document, movType, whOrig, locOrig, selectedBox, toast, boxItems])
 
   // ── Debounced free-item search ────────────────────────────────────────────────
   useEffect(() => {
     if (step !== 'items' || document) return
     clearTimeout(itemDebounce.current)
+    if (!whOrig) { setFreeItems([]); return }
+    if (selectedBox) {
+      setFreeItems([])
+      return
+    }
     if (!itemSearch || itemSearch.length < 2) { setFreeItems([]); return }
     itemDebounce.current = setTimeout(() => {
-      apiFetch(`/simplified-movements/items?search=${encodeURIComponent(itemSearch)}`)
-        .then(setFreeItems)
+      const scopeQuery = buildScopeQuery({ whOrig, locOrig, selectedBox })
+      apiFetch(`/simplified-movements/items${scopeQuery ? `${scopeQuery}&` : '?'}search=${encodeURIComponent(itemSearch)}`)
+        .then(rows => setFreeItems(selectedBox ? rows.filter(item => boxItemIds.has(item.item_id)) : rows))
         .catch(() => {})
     }, 300)
-  }, [itemSearch, step, document])
+  }, [itemSearch, step, document, whOrig, locOrig, selectedBox, currentBoxItems])
 
   // ── Load warehouses when entering warehouse step ──────────────────────────────
   useEffect(() => {
-    if (step !== 'warehouse' || !movType) return
+    if ((step !== 'items' && step !== 'warehouse') || !movType) return
     setLoadingWh(true)
     apiFetch(`/simplified-movements/warehouses?doc_type=${movType.doc_type}`)
       .then(setWarehouses)
       .catch(() => toast('Erro ao carregar armazéns', 'error'))
       .finally(() => setLoadingWh(false))
-  }, [step, movType])
+  }, [step, movType, toast])
 
   // ── Load origin locations ─────────────────────────────────────────────────────
   useEffect(() => {
     if (!whOrig) { setLocations(l => ({ ...l, orig: [] })); setLocOrig(''); return }
-    apiFetch(`/simplified-movements/warehouses/${whOrig}/locations`)
+    const itemQuery = originItemId ? `?item_id=${encodeURIComponent(originItemId)}` : ''
+    apiFetch(`/simplified-movements/warehouses/${whOrig}/locations${itemQuery}`)
       .then(rows => setLocations(l => ({ ...l, orig: rows })))
       .catch(() => {})
-  }, [whOrig])
+  }, [whOrig, originItemId])
+
+  useEffect(() => {
+    if (!whOrig) {
+      setBoxes([])
+      setBoxItems([])
+      setSelectedBoxItemId('')
+      setSelectedBox('')
+      setBoxInput('')
+      return
+    }
+    setLoadingBoxes(true)
+    const locationQuery = locOrig ? `&location_id=${encodeURIComponent(locOrig)}` : ''
+    const itemQuery = originItemId ? `&item_id=${encodeURIComponent(originItemId)}` : ''
+    apiFetch(`/simplified-movements/boxes?wh_id=${whOrig}${locationQuery}${itemQuery}`)
+      .then(setBoxes)
+      .catch(() => setBoxes([]))
+      .finally(() => setLoadingBoxes(false))
+  }, [whOrig, locOrig, originItemId])
+
+  useEffect(() => {
+    if (!selectedBox || !whOrig) {
+      setBoxItems([])
+      setSelectedBoxItemId('')
+      return
+    }
+    setLoadingBoxItems(true)
+    apiFetch(`/simplified-movements/boxes/${encodeURIComponent(selectedBox)}/items?wh_id=${whOrig}`)
+      .then(rows => {
+        setBoxItems(rows)
+        if (rows.length === 1) {
+          setSelectedBoxItemId(rows[0].item_id)
+        } else if (selectedBoxItemId && !rows.some(item => item.item_id === selectedBoxItemId)) {
+          setSelectedBoxItemId('')
+        }
+      })
+      .catch(() => {
+        setBoxItems([])
+        setSelectedBoxItemId('')
+      })
+      .finally(() => setLoadingBoxItems(false))
+  }, [selectedBox, whOrig, selectedBoxItemId])
+
+  useEffect(() => {
+    if (!selectedBoxData) return
+    setBoxInput(selectedBoxData.barcode || String(selectedBoxData.vol_num))
+  }, [selectedBoxData?.vol_num])
 
   // ── Load destination locations ────────────────────────────────────────────────
   useEffect(() => {
@@ -377,7 +493,7 @@ export default function SimplifiedMovements() {
 
     if (mt.allow_business_partner && mt.partner_type) {
       setStep('partner')
-    } else if (mt.force_orig_doc) {
+    } else if (mt.has_origin_doc_types) {
       setStep('document')
     } else {
       setStep('items')
@@ -390,7 +506,7 @@ export default function SimplifiedMovements() {
     setDocument(null)
     setCart([])
 
-    if (movType?.force_orig_doc) {
+    if (movType?.has_origin_doc_types) {
       setStep('document')
     } else {
       setStep('items')
@@ -404,8 +520,19 @@ export default function SimplifiedMovements() {
     setStep('items')
   }, [])
 
+  const handleSkipDocument = useCallback(() => {
+    setDocument(null)
+    setCart([])
+    setStep('items')
+  }, [])
+
   // ── Open item detail (dims / lots / volumes / simple qty) ─────────────────────
   const openItemDetail = useCallback(async (item) => {
+    if (!whOrig) {
+      toast('Seleciona primeiro o armazém de origem', 'error')
+      return
+    }
+
     setActiveItem(item)
     setDimValues({})
     setSelectedLot('')
@@ -419,32 +546,139 @@ export default function SimplifiedMovements() {
 
     setLoadingItemDetail(true)
     try {
+      const scopeQuery = buildScopeQuery({ whOrig, locOrig, selectedBox })
       if (item.has_dims) {
-        const grid = await apiFetch(`/simplified-movements/items/${item.item_id}/dim-stock`)
+        const grid = await apiFetch(`/simplified-movements/items/${item.item_id}/dim-stock${scopeQuery}`)
         setItemDimGrid(grid)
       } else if (item.has_lots) {
-        const lots = await apiFetch(`/simplified-movements/items/${item.item_id}/lots`)
+        const lots = await apiFetch(`/simplified-movements/items/${item.item_id}/lots${scopeQuery}`)
         setItemLots(lots)
       } else if (item.has_volumes) {
-        const vols = await apiFetch(`/simplified-movements/items/${item.item_id}/volumes`)
+        const vols = await apiFetch(`/simplified-movements/items/${item.item_id}/volumes${scopeQuery}`)
         setItemVolumes(vols)
+        if (selectedBox && vols.some(v => String(v.vol_num) === String(selectedBox))) {
+          setSelectedVols([selectedBox])
+        }
       }
     } catch {
       toast('Erro ao carregar detalhe do artigo', 'error')
     } finally {
       setLoadingItemDetail(false)
     }
-  }, [toast])
+  }, [toast, whOrig, locOrig, selectedBox])
+
+  const handleBoxInputChange = useCallback((value) => {
+    setBoxInput(value)
+    if (!value.trim()) {
+      setLocOrig('')
+      setSelectedBoxItemId('')
+      setActiveItem(null)
+      setSelectedBox('')
+      return
+    }
+
+    const match = boxes.find(box => matchesBoxValue(box, value))
+    if (match) {
+      setSelectedBox(String(match.vol_num))
+    } else {
+      if (selectedBox || locOrig) {
+        setLocOrig('')
+        setSelectedBoxItemId('')
+        setActiveItem(null)
+      }
+      setSelectedBox('')
+    }
+  }, [boxes, locOrig, selectedBox])
+
+  const resolveBoxSelection = useCallback(async (value) => {
+    const trimmed = value.trim()
+    if (!whOrig || !trimmed) {
+      setSelectedBox('')
+      return
+    }
+
+    const localMatch = boxes.find(box => matchesBoxValue(box, trimmed))
+    if (localMatch) {
+      setSelectedBox(String(localMatch.vol_num))
+      if (localMatch.location_id) {
+        setLocOrig(localMatch.location_id)
+      }
+      return
+    }
+
+    try {
+      const locationQuery = locOrig ? `&location_id=${encodeURIComponent(locOrig)}` : ''
+      const itemQuery = originItemId ? `&item_id=${encodeURIComponent(originItemId)}` : ''
+      const rows = await apiFetch(
+        `/simplified-movements/boxes?wh_id=${whOrig}${locationQuery}${itemQuery}&search=${encodeURIComponent(trimmed)}`
+      )
+      if (!rows.length) return
+
+      setBoxes(prev => {
+        const merged = [...prev]
+        rows.forEach(row => {
+          if (!merged.some(box => String(box.vol_num) === String(row.vol_num))) {
+            merged.push(row)
+          }
+        })
+        return merged
+      })
+
+      const match = rows.find(box => matchesBoxValue(box, trimmed))
+      if (match) {
+        setSelectedBox(String(match.vol_num))
+        if (match.location_id) {
+          setLocOrig(match.location_id)
+        }
+      }
+    } catch {
+      // ignore lookup errors while scanning/selecting a box
+    }
+  }, [whOrig, boxes, locOrig, originItemId])
+
+  useEffect(() => {
+    if (!selectedBoxItemId) return
+    const item = currentBoxItems.find(entry => entry.item_id === selectedBoxItemId)
+    if (item) openItemDetail(item)
+  }, [selectedBoxItemId, currentBoxItems, openItemDetail])
+
+  useEffect(() => {
+    if (step !== 'items' || !activeItem || !whOrig) return
+    openItemDetail(activeItem)
+  }, [step, activeItem?.item_id, whOrig, locOrig, selectedBox])
 
   // ── Dim grid cell change ───────────────────────────────────────────────────────
   const handleDimChange = useCallback((color, size, val) => {
     setDimValues(prev => ({ ...prev, [`${color}__${size}`]: val }))
   }, [])
 
+  const handleItemSearchChange = useCallback((value) => {
+    setItemSearch(value)
+    if (!selectedBox || !selectedBoxItemId) return
+
+    const normalized = value.trim().toLowerCase()
+    if (!normalized) {
+      setSelectedBoxItemId('')
+      return
+    }
+
+    const currentMatch = currentBoxItems.find(item => item.item_id === selectedBoxItemId)
+    const currentHaystack = currentMatch
+      ? `${currentMatch.item_id} ${currentMatch.item_desc || ''}`.toLowerCase()
+      : ''
+
+    if (!currentHaystack.includes(normalized)) {
+      setSelectedBoxItemId('')
+    }
+  }, [selectedBox, selectedBoxItemId, currentBoxItems])
+
   // ── Add item to cart ───────────────────────────────────────────────────────────
   const addToCart = useCallback(() => {
     if (!activeItem) return
     const docRow = activeItem.order_row ?? null
+    const currentOriginLocation = effectiveOriginLocation || ''
+    const existingItem = cart.find(item => item.item_id === activeItem.item_id)
+    const existingLines = existingItem?.lines || []
     let newLines = []
 
     if (activeItem.has_dims && itemDimGrid) {
@@ -453,28 +687,63 @@ export default function SimplifiedMovements() {
         const qty = parseFloat(val)
         if (!val || isNaN(qty) || qty <= 0) continue
         const [color, size] = key.split('__')
-        newLines.push({ color_id: color, size_id: size, lot_id: '', vol_num: null, qty, doc_row: docRow })
+        const cell = itemDimGrid.cells.find(entry => entry.color_id === color && entry.size_id === size)
+        const alreadyAdded = existingLines
+          .filter(line =>
+            line.color_id === color &&
+            line.size_id === size &&
+            (line.location_id_orig || '') === currentOriginLocation
+          )
+          .reduce((sum, line) => sum + line.qty, 0)
+        const availableQty = cell?.qty_stock ?? 0
+        if (qty + alreadyAdded > availableQty) {
+          toast(`A quantidade total para ${color} / ${size} não pode exceder o stock disponível (${availableQty})`, 'error')
+          return
+        }
+        newLines.push({ color_id: color, size_id: size, lot_id: '', vol_num: selectedBox || null, qty, doc_row: docRow, location_id_orig: currentOriginLocation })
       }
       if (!newLines.length) { toast('Introduce pelo menos uma quantidade', 'error'); return }
     } else if (activeItem.has_lots) {
       if (!selectedLot) { toast('Seleciona um lote', 'error'); return }
       const qty = parseFloat(lotQty)
       if (!qty || qty <= 0) { toast('Introduce uma quantidade válida', 'error'); return }
-      newLines.push({ color_id: '', size_id: '', lot_id: selectedLot, vol_num: null, qty, doc_row: docRow })
+      const lot = itemLots.find(entry => entry.lot_id === selectedLot)
+      const alreadyAdded = existingLines
+        .filter(line => line.lot_id === selectedLot && (line.location_id_orig || '') === currentOriginLocation)
+        .reduce((sum, line) => sum + line.qty, 0)
+      const availableQty = lot?.qty_stock ?? 0
+      if (qty + alreadyAdded > availableQty) {
+        toast(`A quantidade total para o lote ${selectedLot} não pode exceder o stock disponível (${availableQty})`, 'error')
+        return
+      }
+      newLines.push({ color_id: '', size_id: '', lot_id: selectedLot, vol_num: selectedBox || null, qty, doc_row: docRow, location_id_orig: currentOriginLocation })
     } else if (activeItem.has_volumes) {
       if (!selectedVols.length) { toast('Seleciona um volume', 'error'); return }
       const vol = itemVolumes.find(v => v.vol_num === selectedVols[0])
       const qty = parseFloat(volumeQty)
       if (!qty || qty <= 0) { toast('Introduce uma quantidade válida', 'error'); return }
-      if (vol && qty > vol.qty_stock) {
-        toast(`A quantidade não pode exceder o stock do volume (${vol.qty_stock})`, 'error')
+      const alreadyAdded = existingLines
+        .filter(line =>
+          String(line.vol_num) === String(selectedVols[0]) &&
+          (line.location_id_orig || '') === currentOriginLocation
+        )
+        .reduce((sum, line) => sum + line.qty, 0)
+      if (vol && qty + alreadyAdded > vol.qty_stock) {
+        toast(`A quantidade total não pode exceder o stock do volume (${vol.qty_stock})`, 'error')
         return
       }
-      newLines.push({ color_id: '', size_id: '', lot_id: '', vol_num: selectedVols[0], qty, doc_row: docRow })
+      newLines.push({ color_id: '', size_id: '', lot_id: '', vol_num: selectedVols[0], qty, doc_row: docRow, location_id_orig: currentOriginLocation })
     } else {
       const qty = parseFloat(simpleQty)
       if (!qty || qty <= 0) { toast('Introduce uma quantidade válida', 'error'); return }
-      newLines.push({ color_id: '', size_id: '', lot_id: '', vol_num: null, qty, doc_row: docRow })
+      const alreadyAdded = existingLines
+        .filter(line => (line.location_id_orig || '') === currentOriginLocation)
+        .reduce((sum, line) => sum + line.qty, 0)
+      if (activeItem.qty_stock != null && qty + alreadyAdded > activeItem.qty_stock) {
+        toast(`A quantidade total não pode exceder o stock disponível (${activeItem.qty_stock})`, 'error')
+        return
+      }
+      newLines.push({ color_id: '', size_id: '', lot_id: '', vol_num: selectedBox || null, qty, doc_row: docRow, location_id_orig: currentOriginLocation })
     }
 
     setCart(prev => {
@@ -488,13 +757,19 @@ export default function SimplifiedMovements() {
         item_id:   activeItem.item_id,
         item_desc: activeItem.item_desc || '',
         stk_unit:  activeItem.stk_unit || 'UN',
+        origin_box: selectedBox || '',
+        origin_location: effectiveOriginLocation || '',
         lines:     newLines,
       }]
     })
 
     setActiveItem(null)
+    setItemSearch('')
+    if (currentBoxItems.length > 1) {
+      setSelectedBoxItemId('')
+    }
     toast('Artigo adicionado', 'success')
-  }, [activeItem, dimValues, selectedLot, lotQty, selectedVols, volumeQty, simpleQty, itemDimGrid, itemVolumes, toast])
+  }, [activeItem, cart, currentBoxItems.length, dimValues, selectedLot, lotQty, selectedVols, volumeQty, simpleQty, itemDimGrid, itemLots, itemVolumes, selectedBox, effectiveOriginLocation, toast])
 
   // ── Remove cart item ───────────────────────────────────────────────────────────
   const removeFromCart = useCallback((itemId) => {
@@ -503,7 +778,7 @@ export default function SimplifiedMovements() {
 
   // ── Execute movement ───────────────────────────────────────────────────────────
   const handleExecute = useCallback(async () => {
-    if (!whOrig || !locOrig) { toast('Seleciona armazém e localização de origem', 'error'); return }
+    if (!whOrig || !effectiveOriginLocation) { toast('Seleciona o armazém e depois a caixa ou a localização de origem', 'error'); return }
     if (movType?.is_transfer && (!whDest || !locDest)) {
       toast('Seleciona armazém e localização de destino', 'error'); return
     }
@@ -516,6 +791,7 @@ export default function SimplifiedMovements() {
         size_id:     l.size_id  || '',
         lot_id:      l.lot_id   || '',
         vol_num:     l.vol_num  ?? null,
+        location_id_orig: l.location_id_orig || effectiveOriginLocation,
         qty:         l.qty,
         unit_value:  0,
         doc_row:     l.doc_row  ?? null,
@@ -530,9 +806,10 @@ export default function SimplifiedMovements() {
         body:    JSON.stringify({
           doc_type:         movType.doc_type,
           order_id:         document?.order_id ?? null,
+          origin_doc_type:  document?.doc_type ?? null,
           partner_id:       partner?.partner_id ?? null,
           wh_id_orig:       parseInt(whOrig),
-          location_id_orig: locOrig,
+          location_id_orig: effectiveOriginLocation,
           wh_id_dest:       movType.is_transfer ? parseInt(whDest) : null,
           location_id_dest: movType.is_transfer ? locDest : null,
           obs:              '',
@@ -546,7 +823,28 @@ export default function SimplifiedMovements() {
     } finally {
       setExecuting(false)
     }
-  }, [movType, document, partner, whOrig, locOrig, whDest, locDest, cart, toast])
+  }, [movType, document, partner, whOrig, effectiveOriginLocation, whDest, locDest, cart, toast])
+
+  const reprintMovementLabel = useCallback(async () => {
+    if (!result?.label_payload) {
+      toast('Nao existem dados de etiqueta para reimpressao', 'error')
+      return
+    }
+
+    setPrintingLabel(true)
+    try {
+      const response = await apiFetch('/simplified-movements/print-label', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(result.label_payload),
+      })
+      toast(response.printer_message || 'Etiqueta reenviada para impressao', 'success')
+    } catch (error) {
+      toast(error.message || 'Erro ao reimprimir etiqueta', 'error')
+    } finally {
+      setPrintingLabel(false)
+    }
+  }, [result, toast])
 
   // ── Reset ──────────────────────────────────────────────────────────────────────
   const reset = useCallback(() => {
@@ -558,6 +856,7 @@ export default function SimplifiedMovements() {
     setActiveItem(null)
     setResult(null)
     setWhOrig(''); setLocOrig(''); setWhDest(''); setLocDest('')
+    setBoxes([]); setSelectedBox('')
     setPartnerSearch(''); setItemSearch('')
   }, [])
 
@@ -565,9 +864,11 @@ export default function SimplifiedMovements() {
   const visibleSteps = (() => {
     if (!movType) return STEP_LABELS
     const steps = ['Tipo']
-    if (movType.allow_business_partner && movType.partner_type) steps.push('Parceiro')
-    if (movType.force_orig_doc) steps.push('Documento')
-    steps.push('Artigos', 'Armazém', 'Confirmar')
+    if (requiresPartner) steps.push('Parceiro')
+    if (hasOriginDocTypes) steps.push('Documento')
+    steps.push('Artigos')
+    if (movType?.is_transfer) steps.push('Armazém')
+    steps.push('Confirmar')
     return steps
   })()
 
@@ -575,10 +876,10 @@ export default function SimplifiedMovements() {
   const currentStepNum = (() => {
     const map = { type: 1 }
     let n = 2
-    if (movType?.allow_business_partner && movType?.partner_type) { map.partner = n; n++ }
-    if (movType?.force_orig_doc) { map.document = n; n++ }
+    if (requiresPartner) { map.partner = n; n++ }
+    if (hasOriginDocTypes) { map.document = n; n++ }
     map.items = n; n++
-    map.warehouse = n; n++
+    if (movType?.is_transfer) { map.warehouse = n; n++ }
     map.confirm = n
     return map[step] ?? 1
   })()
@@ -687,7 +988,9 @@ export default function SimplifiedMovements() {
       {/* ════ STEP: document ════════════════════════════════════════════════════ */}
       {step === 'document' && (
         <Card>
-          <CardTitle>Seleciona o documento de origem</CardTitle>
+          <CardTitle>
+            {requiresOriginDocument ? 'Seleciona o documento de origem' : 'Seleciona o documento de origem (opcional)'}
+          </CardTitle>
 
           {partner && (
             <div className={styles.contextBar}>
@@ -729,9 +1032,14 @@ export default function SimplifiedMovements() {
           )}
 
           <div className={styles.actions} style={{ marginTop: 16 }}>
-            <Btn variant="outline" onClick={() => setStep(movType?.allow_business_partner ? 'partner' : 'type')}>
+            <Btn variant="outline" onClick={() => setStep(requiresPartner ? 'partner' : 'type')}>
               ← Voltar
             </Btn>
+            {!requiresOriginDocument && (
+              <Btn variant="outline" onClick={handleSkipDocument}>
+                Saltar →
+              </Btn>
+            )}
           </div>
         </Card>
       )}
@@ -751,6 +1059,95 @@ export default function SimplifiedMovements() {
             )}
           </div>
 
+          <Card>
+            <CardTitle>Origem do picking</CardTitle>
+            {loadingWh ? (
+              <div style={{ textAlign: 'center', padding: 24 }}><Spinner /></div>
+            ) : (
+              <div className={styles.warehouseGrid}>
+                <div className={styles.warehouseField}>
+                  <label className={styles.warehouseLabel}>Armazém origem *</label>
+                  <select
+                    className={styles.warehouseSelect}
+                    value={whOrig}
+                    onChange={e => setWhOrig(e.target.value)}
+                  >
+                    <option value="">Selecionar...</option>
+                    {warehouses
+                      .filter(w => !w.wh_role || w.wh_role === 'O' || w.wh_role === '')
+                      .map(w => (
+                        <option key={w.wh_id} value={w.wh_id}>{w.wh_desc}</option>
+                      ))}
+                  </select>
+                </div>
+
+                <div className={styles.warehouseField}>
+                  <label className={styles.warehouseLabel}>Localização origem</label>
+                  <select
+                    className={styles.warehouseSelect}
+                    value={locOrig}
+                    onChange={e => setLocOrig(e.target.value)}
+                    disabled={!whOrig}
+                  >
+                    <option value="">Selecionar...</option>
+                    {locations.orig.map(l => (
+                      <option key={l.location_id} value={l.location_id}>
+                        {l.location_id} — {l.location_desc}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className={styles.warehouseField}>
+                  <label className={styles.warehouseLabel}>Caixa origem</label>
+                  <input
+                    className={styles.warehouseSelect}
+                    list="simplified-movement-boxes"
+                    value={boxInput}
+                    onChange={e => handleBoxInputChange(e.target.value)}
+                    onBlur={e => { void resolveBoxSelection(e.target.value) }}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        void resolveBoxSelection(e.currentTarget.value)
+                      }
+                    }}
+                    placeholder={loadingBoxes ? 'A carregar caixas...' : 'Ler código de barras ou escolher caixa'}
+                    disabled={!whOrig || loadingBoxes}
+                  />
+                  <datalist id="simplified-movement-boxes">
+                    {boxes.map(box => (
+                      <option
+                        key={box.vol_num}
+                        value={box.barcode || String(box.vol_num)}
+                        label={`${box.vol_num} · ${box.location_id} · ${box.items_count} art. · ${box.qty_stock} un.`}
+                      />
+                    ))}
+                  </datalist>
+                </div>
+
+                {selectedBox && (
+                  <div className={styles.warehouseField}>
+                    <label className={styles.warehouseLabel}>Artigo da caixa</label>
+                    <select
+                      className={styles.warehouseSelect}
+                      value={selectedBoxItemId}
+                      onChange={e => setSelectedBoxItemId(e.target.value)}
+                      disabled={loadingBoxItems}
+                    >
+                      <option value="">{loadingBoxItems ? 'A carregar...' : 'Todos os artigos da caixa'}</option>
+                      {currentBoxItems.map(item => (
+                        <option key={item.item_id} value={item.item_id}>
+                          {item.item_id} · {(item.qty_stock ?? 0)} {item.stk_unit || 'UN'}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+            )}
+          </Card>
+
           {/* Cart */}
           {cart.length > 0 && (
             <div className={styles.cartSection}>
@@ -761,7 +1158,11 @@ export default function SimplifiedMovements() {
               {cart.map(item => (
                 <div key={item.item_id} className={styles.cartItem}>
                   <div className={styles.cartItemId}>{item.item_id}</div>
-                  <div className={styles.cartItemDesc}>{item.item_desc}</div>
+                  <div className={styles.cartItemDesc}>
+                    {item.item_desc}
+                    {item.origin_box ? ` · Caixa ${item.origin_box}` : ''}
+                    {item.origin_location ? ` · ${item.origin_location}` : ''}
+                  </div>
                   <div className={styles.cartItemQty}>
                     {item.lines.reduce((s, l) => s + l.qty, 0)} {item.stk_unit}
                   </div>
@@ -785,6 +1186,9 @@ export default function SimplifiedMovements() {
                 {activeItem.has_volumes && <span className={styles.itemStockBadge}>Volumes</span>}
               </div>
               <div className={styles.itemDetailSub}>{activeItem.item_desc}</div>
+              <div className={styles.itemDetailSub}>
+                Quantidade total possível de movimentar: {activeItem.qty_stock ?? 0} {activeItem.stk_unit || 'UN'}
+              </div>
 
               {loadingItemDetail ? (
                 <div style={{ textAlign: 'center', padding: 20 }}><Spinner /></div>
@@ -810,7 +1214,7 @@ export default function SimplifiedMovements() {
                 </>
               ) : activeItem.has_volumes ? (
                 <>
-                  <CardTitle>Selecionar volume</CardTitle>
+                  <CardTitle>{selectedBox ? 'Caixa de origem' : 'Selecionar volume'}</CardTitle>
                   <VolumeSelector
                     volumes={itemVolumes}
                     selected={selectedVols}
@@ -826,7 +1230,9 @@ export default function SimplifiedMovements() {
                 </>
               ) : (
                 <div className={styles.qtyRow}>
-                  <span className={styles.qtyLabel}>Quantidade ({activeItem.stk_unit}):</span>
+                  <span className={styles.qtyLabel}>
+                    Quantidade ({activeItem.stk_unit}){activeItem.qty_stock != null ? ` · stock: ${activeItem.qty_stock}` : ''}:
+                  </span>
                   <input
                     className={styles.qtyInput}
                     type="number"
@@ -851,11 +1257,16 @@ export default function SimplifiedMovements() {
           {!activeItem && document && (
             <Card>
               <CardTitle>Artigos do documento</CardTitle>
+              {(!whOrig) && (
+                <div className={styles.empty}>
+                  <div className={styles.emptyText}>Seleciona primeiro o armazém para carregar o stock.</div>
+                </div>
+              )}
               {loadingLines ? (
                 <div style={{ textAlign: 'center', padding: 24 }}><Spinner /></div>
               ) : (
                 <div className={styles.list}>
-                  {docLines.map(line => {
+                  {docLines.filter(line => !selectedBoxItemId || line.item_id === selectedBoxItemId).map(line => {
                     const inCart = cart.some(c => c.item_id === line.item_id)
                     return (
                       <button
@@ -877,14 +1288,19 @@ export default function SimplifiedMovements() {
                           <div style={{ fontSize: 13, fontFamily: 'var(--font-mono)', color: 'var(--accent)' }}>
                             {line.qty_pending} pend.
                           </div>
+                          <div style={{ fontSize: 12, color: 'var(--text3)' }}>
+                            {line.qty_stock ?? 0} disp.
+                          </div>
                         </div>
                         <span className={styles.listItemArrow}>›</span>
                       </button>
                     )
                   })}
-                  {docLines.length === 0 && (
+                  {docLines.length === 0 && whOrig && hasOriginScope && (
                     <div className={styles.empty}>
-                      <div className={styles.emptyText}>Nenhum artigo pendente neste documento</div>
+                      <div className={styles.emptyText}>
+                        {selectedBox ? 'Nenhum artigo deste documento existe na caixa selecionada' : 'Nenhum artigo pendente neste documento'}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -896,18 +1312,36 @@ export default function SimplifiedMovements() {
           {!activeItem && !document && (
             <Card>
               <CardTitle>Pesquisar artigo</CardTitle>
+              {(!whOrig) && (
+                <div className={styles.empty}>
+                  <div className={styles.emptyText}>Seleciona primeiro o armazém para pesquisar stock.</div>
+                </div>
+              )}
               <div className={styles.searchBar}>
                 <input
                   className={styles.searchInput}
                   type="text"
+                  list={selectedBox ? 'simplified-movement-box-items' : undefined}
                   placeholder="Código, referência ou descrição..."
                   value={itemSearch}
-                  onChange={e => setItemSearch(e.target.value)}
+                  onChange={e => handleItemSearchChange(e.target.value)}
+                  disabled={!whOrig}
                   autoFocus
                 />
+                {selectedBox && (
+                  <datalist id="simplified-movement-box-items">
+                    {currentBoxItems.map(item => (
+                      <option
+                        key={item.item_id}
+                        value={item.item_id}
+                        label={`${item.item_desc} · ${item.qty_stock ?? 0} ${item.stk_unit || 'UN'}`}
+                      />
+                    ))}
+                  </datalist>
+                )}
               </div>
               <div className={styles.list}>
-                {freeItems.map(item => (
+                {visibleFreeItems.map(item => (
                   <button
                     key={item.item_id}
                     className={styles.listItem}
@@ -926,20 +1360,27 @@ export default function SimplifiedMovements() {
                     <span className={styles.listItemArrow}>›</span>
                   </button>
                 ))}
+                {selectedBox && !loadingBoxItems && visibleFreeItems.length === 0 && (
+                  <div className={styles.empty}>
+                    <div className={styles.emptyText}>
+                      Nenhum artigo encontrado para a caixa selecionada
+                    </div>
+                  </div>
+                )}
               </div>
             </Card>
           )}
 
           <div className={styles.actions}>
             <Btn variant="outline" onClick={() => {
-              if (document) setStep('document')
+              if (hasOriginDocTypes) setStep('document')
               else if (partner) setStep('partner')
               else setStep('type')
             }}>← Voltar</Btn>
             <Btn
               variant="primary"
-              disabled={cart.length === 0}
-              onClick={() => setStep('warehouse')}
+              disabled={cart.length === 0 || !whOrig || !effectiveOriginLocation}
+              onClick={() => setStep(movType?.is_transfer ? 'warehouse' : 'confirm')}
             >
               Continuar ({cart.length} art.) →
             </Btn>
@@ -950,24 +1391,31 @@ export default function SimplifiedMovements() {
       {/* ════ STEP: warehouse ════════════════════════════════════════════════════ */}
       {step === 'warehouse' && (
         <Card>
-          <CardTitle>Armazéns e localizações</CardTitle>
+          <CardTitle>Destino da transferência</CardTitle>
 
           {loadingWh ? (
             <div style={{ textAlign: 'center', padding: 24 }}><Spinner /></div>
           ) : (
             <div className={styles.warehouseGrid}>
               <div className={styles.warehouseField}>
-                <label className={styles.warehouseLabel}>
-                  {movType?.is_transfer ? 'Armazém Origem *' : 'Armazém *'}
-                </label>
+                <label className={styles.warehouseLabel}>Origem selecionada</label>
+                <div className={styles.warehouseSelect} style={{ display: 'flex', alignItems: 'center' }}>
+                  {(warehouses.find(w => String(w.wh_id) === String(whOrig))?.wh_desc || whOrig) || '—'}
+                  {effectiveOriginLocation ? ` · ${effectiveOriginLocation}` : ''}
+                  {selectedBox ? ` · Caixa ${selectedBox}` : ''}
+                </div>
+              </div>
+
+              <div className={styles.warehouseField}>
+                <label className={styles.warehouseLabel}>Armazém Destino *</label>
                 <select
                   className={styles.warehouseSelect}
-                  value={whOrig}
-                  onChange={e => setWhOrig(e.target.value)}
+                  value={whDest}
+                  onChange={e => setWhDest(e.target.value)}
                 >
                   <option value="">Selecionar...</option>
                   {warehouses
-                    .filter(w => !w.wh_role || w.wh_role === 'O' || w.wh_role === '')
+                    .filter(w => !w.wh_role || w.wh_role === 'D' || w.wh_role === '')
                     .map(w => (
                       <option key={w.wh_id} value={w.wh_id}>{w.wh_desc}</option>
                     ))}
@@ -975,58 +1423,21 @@ export default function SimplifiedMovements() {
               </div>
 
               <div className={styles.warehouseField}>
-                <label className={styles.warehouseLabel}>Localização *</label>
+                <label className={styles.warehouseLabel}>Localização Destino *</label>
                 <select
                   className={styles.warehouseSelect}
-                  value={locOrig}
-                  onChange={e => setLocOrig(e.target.value)}
-                  disabled={!whOrig}
+                  value={locDest}
+                  onChange={e => setLocDest(e.target.value)}
+                  disabled={!whDest}
                 >
                   <option value="">Selecionar...</option>
-                  {locations.orig.map(l => (
+                  {locations.dest.map(l => (
                     <option key={l.location_id} value={l.location_id}>
                       {l.location_id} — {l.location_desc}
                     </option>
                   ))}
                 </select>
               </div>
-
-              {movType?.is_transfer && (
-                <>
-                  <div className={styles.warehouseField} style={{ marginTop: 8 }}>
-                    <label className={styles.warehouseLabel}>Armazém Destino *</label>
-                    <select
-                      className={styles.warehouseSelect}
-                      value={whDest}
-                      onChange={e => setWhDest(e.target.value)}
-                    >
-                      <option value="">Selecionar...</option>
-                      {warehouses
-                        .filter(w => !w.wh_role || w.wh_role === 'D' || w.wh_role === '')
-                        .map(w => (
-                          <option key={w.wh_id} value={w.wh_id}>{w.wh_desc}</option>
-                        ))}
-                    </select>
-                  </div>
-
-                  <div className={styles.warehouseField}>
-                    <label className={styles.warehouseLabel}>Localização Destino *</label>
-                    <select
-                      className={styles.warehouseSelect}
-                      value={locDest}
-                      onChange={e => setLocDest(e.target.value)}
-                      disabled={!whDest}
-                    >
-                      <option value="">Selecionar...</option>
-                      {locations.dest.map(l => (
-                        <option key={l.location_id} value={l.location_id}>
-                          {l.location_id} — {l.location_desc}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </>
-              )}
             </div>
           )}
 
@@ -1034,7 +1445,7 @@ export default function SimplifiedMovements() {
             <Btn variant="outline" onClick={() => setStep('items')}>← Voltar</Btn>
             <Btn
               variant="primary"
-              disabled={!whOrig || !locOrig || (movType?.is_transfer && (!whDest || !locDest))}
+              disabled={!whDest || !locDest}
               onClick={() => setStep('confirm')}
             >
               Rever e confirmar →
@@ -1069,7 +1480,7 @@ export default function SimplifiedMovements() {
                 <span className={styles.summaryKey}>Armazém origem</span>
                 <span className={styles.summaryValue}>
                   {warehouses.find(w => String(w.wh_id) === String(whOrig))?.wh_desc || whOrig}
-                  {locOrig ? ` · ${locOrig}` : ''}
+                  {effectiveOriginLocation ? ` · ${effectiveOriginLocation}` : ''}{selectedBox ? ` · Caixa ${selectedBox}` : ''}
                 </span>
               </div>
               {movType?.is_transfer && (
@@ -1109,7 +1520,7 @@ export default function SimplifiedMovements() {
           </Card>
 
           <div className={styles.actions}>
-            <Btn variant="outline" onClick={() => setStep('warehouse')}>← Voltar</Btn>
+            <Btn variant="outline" onClick={() => setStep(movType?.is_transfer ? 'warehouse' : 'items')}>← Voltar</Btn>
             <Btn variant="success" loading={executing} onClick={handleExecute}>
               ✓ Confirmar e executar
             </Btn>
@@ -1124,6 +1535,11 @@ export default function SimplifiedMovements() {
             <div className={styles.successIcon}>✅</div>
             <div className={styles.successTitle}>Movimento executado!</div>
             <div className={styles.successDetail}>{result.message}</div>
+            {result.print_message && (
+              <div style={{ marginBottom: 16, color: result.print_success ? 'var(--green)' : 'var(--text2)' }}>
+                {result.print_success ? 'Etiqueta impressa: ' : 'Impressao: '}{result.print_message}
+              </div>
+            )}
             {result.warnings?.length > 0 && (
               <div style={{ marginBottom: 16, textAlign: 'left' }}>
                 {result.warnings.map((w, i) => (
@@ -1131,7 +1547,14 @@ export default function SimplifiedMovements() {
                 ))}
               </div>
             )}
-            <Btn variant="primary" onClick={reset}>Novo movimento</Btn>
+            <div className={styles.actions} style={{ justifyContent: 'center' }}>
+              {result.label_payload?.groups?.length > 0 && (
+                <Btn variant="outline" loading={printingLabel} onClick={reprintMovementLabel}>
+                  Reimprimir etiqueta
+                </Btn>
+              )}
+              <Btn variant="primary" onClick={reset}>Novo movimento</Btn>
+            </div>
           </div>
         </Card>
       )}

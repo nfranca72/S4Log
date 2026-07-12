@@ -22,6 +22,10 @@ class RFIDConfig(BaseModel):
     antennas: list[AntennaConfig]
 
 
+class StationConfig(BaseModel):
+    station_identifier: str = ""
+
+
 class TunnelAntennaConfig(BaseModel):
     antenna: int
     enabled: bool
@@ -81,6 +85,23 @@ def _write_env(updates: dict):
         f.writelines(new_lines)
 
 
+def _apply_runtime_updates(updates: dict):
+    """Mantém o singleton `settings` alinhado com o que acabou de ser gravado no .env."""
+    for key, value in updates.items():
+        if not hasattr(settings, key):
+            continue
+
+        current = getattr(settings, key)
+        if isinstance(current, bool):
+            parsed_value = str(value).strip().lower() in {"1", "true", "yes", "on"}
+        elif isinstance(current, int):
+            parsed_value = int(value)
+        else:
+            parsed_value = value
+
+        setattr(settings, key, parsed_value)
+
+
 @router.get("/rfid", response_model=RFIDConfig)
 def get_rfid_config():
     """Devolve configuração atual do RFID."""
@@ -113,7 +134,25 @@ def save_rfid_config(cfg: RFIDConfig):
         updates[f'RFID_ANTENNA{i}_RX_SENSITIVITY'] = str(ant.rx_sensitivity)
 
     _write_env(updates)
+    _apply_runtime_updates(updates)
     return cfg
+
+
+@router.get("/station", response_model=StationConfig)
+def get_station_config():
+    return StationConfig(
+        station_identifier=settings.STATION_IDENTIFIER,
+    )
+
+
+@router.post("/station", response_model=StationConfig)
+def save_station_config(cfg: StationConfig):
+    updates = {
+        "STATION_IDENTIFIER": (cfg.station_identifier or "").strip(),
+    }
+    _write_env(updates)
+    _apply_runtime_updates(updates)
+    return StationConfig(station_identifier=updates["STATION_IDENTIFIER"])
 
 
 # ── Túneis RFID ────────────────────────────────────────────────────────────────
@@ -135,7 +174,12 @@ def list_tunnels():
         "host": r[3], "port": r[4],
         "antennas": [i+1 for i in range(4) if r[5+i]],
         "tx_powers": [r[9], r[10], r[11], r[12]],
-        "rx_sensitivity": [0, 0, 0, 0],
+        "rx_sensitivity": [
+            getattr(settings, "RFID_ANTENNA1_RX_SENSITIVITY", 0),
+            getattr(settings, "RFID_ANTENNA2_RX_SENSITIVITY", 0),
+            getattr(settings, "RFID_ANTENNA3_RX_SENSITIVITY", 0),
+            getattr(settings, "RFID_ANTENNA4_RX_SENSITIVITY", 0),
+        ],
         "active": bool(r[13]),
     } for r in rows]
 
@@ -161,7 +205,7 @@ def get_tunnel_rfid_config(tunnel_id: int):
             antenna=i + 1,
             enabled=bool(row[3 + i]),
             tx_power=int(row[7 + i] or 0),
-            rx_sensitivity=0,
+            rx_sensitivity=getattr(settings, f"RFID_ANTENNA{i + 1}_RX_SENSITIVITY", 0),
         )
         for i in range(4)
     ]
@@ -215,5 +259,12 @@ def save_tunnel_rfid_config(tunnel_id: int, cfg: TunnelRFIDConfig):
             tunnel_id,
         ))
         conn.commit()
+
+    rx_updates = {
+        f"RFID_ANTENNA{antenna_id}_RX_SENSITIVITY": str(antennas[antenna_id].rx_sensitivity)
+        for antenna_id in range(1, 5)
+    }
+    _write_env(rx_updates)
+    _apply_runtime_updates(rx_updates)
 
     return get_tunnel_rfid_config(tunnel_id)

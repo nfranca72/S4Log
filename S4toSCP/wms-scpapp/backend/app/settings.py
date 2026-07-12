@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     ZEBRA_PRINTER_IP: str = "0.0.0.0"
     ZEBRA_PRINTER_PORT: int = 9100
     LABEL_TEMPLATE_DIR: str = "label_templates"
+    STATION_IDENTIFIER: str = ""
+    STATION_MAPPING_TABLE: Optional[str] = None
+    STATION_MAPPING_MAC_COLUMN: Optional[str] = None
+    STATION_MAPPING_USERID_COLUMN: Optional[str] = None
+    STATION_MAPPING_PROFILE_COLUMN: Optional[str] = None
 
     RFID_ANTENNA1_TX_POWER: int = 3000
     RFID_ANTENNA2_TX_POWER: int = 3000

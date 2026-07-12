@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from app.db.connection import db_cursor
 from app.services.label_printing import (
     get_document_print_config,
     get_document_print_configs,
+    _station_debug_text,
     render_label_template,
     resolve_label_template,
     print_volume_label,
@@ -14,6 +15,10 @@ from app.services.label_printing import (
 )
 
 router = APIRouter(prefix="/labels", tags=["Etiquetas RFID"])
+
+
+def _station_identifier(request: Request) -> str:
+    return str(request.headers.get("X-Station-Identifier") or "").strip()
 
 
 class LabelItem(BaseModel):
@@ -469,22 +474,20 @@ def document_lines(doc_type: str, order_id: int):
 
 
 @router.get("/print-configs", response_model=list[LabelPrintConfig])
-def print_configs():
-    with db_cursor() as (cursor, _):
-        cursor.execute("""
-            SELECT ISNULL(DocPrintDescr, '') AS DocPrintDescr, ISNULL(DocPrintFile, '') AS DocPrintFile
-            FROM DocumentPrintConfig
-            WHERE Area = 'ETIQ' AND DocType = 'ETIQ'
-            ORDER BY DocPrintDescr
-        """)
-        rows = cursor.fetchall()
-
-    return _unique_print_configs(rows)
+def print_configs(request: Request):
+    configs = get_document_print_configs("ETIQ", "ETIQ", station_identifier=_station_identifier(request))
+    return _unique_print_configs([
+        (
+            str(config.get("DocPrintDescr") or config.get("DocPrintFile") or "").strip(),
+            str(config.get("DocPrintFile") or "").strip(),
+        )
+        for config in configs
+    ])
 
 
 @router.get("/volume-print-configs", response_model=list[LabelPrintConfig])
-def volume_print_configs():
-    configs = get_document_print_configs("VOLUMES", "CX")
+def volume_print_configs(request: Request):
+    configs = get_document_print_configs("VOLUMES", "CX", station_identifier=_station_identifier(request))
     return _unique_print_configs([
         (
             str(config.get("DocPrintDescr") or config.get("DocPrintFile") or "").strip(),
@@ -495,7 +498,7 @@ def volume_print_configs():
 
 
 @router.post("/volumes/{vol_num}/reprint", response_model=VolumeLabelReprintResponse)
-def reprint_volume_label(vol_num: int, req: VolumeLabelReprintRequest):
+def reprint_volume_label(vol_num: int, req: VolumeLabelReprintRequest, request: Request):
     if not str(req.config_file or "").strip():
         raise HTTPException(status_code=400, detail="Seleciona o tipo de etiqueta da caixa")
 
@@ -503,6 +506,7 @@ def reprint_volume_label(vol_num: int, req: VolumeLabelReprintRequest):
         vol_num,
         config_file=req.config_file,
         require_direct_print=False,
+        station_identifier=_station_identifier(request),
     )
     if not result["printed"]:
         raise HTTPException(status_code=400, detail=str(result["message"] or "Nao foi possivel reimprimir a etiqueta"))
@@ -514,14 +518,25 @@ def reprint_volume_label(vol_num: int, req: VolumeLabelReprintRequest):
 
 
 @router.post("/print", response_model=LabelPrintResponse)
-def print_labels(req: LabelPrintRequest):
-    config = get_document_print_config("ETIQ", "ETIQ", config_file=req.config_file)
+def print_labels(req: LabelPrintRequest, request: Request):
+    config = get_document_print_config(
+        "ETIQ",
+        "ETIQ",
+        config_file=req.config_file,
+        station_identifier=_station_identifier(request),
+    )
     if not config:
         raise HTTPException(status_code=400, detail="Configuracao de impressao nao encontrada para a etiqueta selecionada")
 
     printer_name = str(config.get("PrinterName") or "").strip()
     if not printer_name:
-        raise HTTPException(status_code=400, detail="PrinterName nao configurado em DocumentPrintConfig para esta etiqueta")
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "PrinterName nao configurado em DocumentPrintConfig para esta etiqueta. "
+                f"{_station_debug_text(_station_identifier(request))}"
+            ),
+        )
 
     printable_lines = [line for line in req.lines if line.print_qty > 0]
     total_labels = sum(line.print_qty for line in printable_lines)

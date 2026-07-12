@@ -2,11 +2,23 @@ import { useEffect, useMemo, useState } from 'react'
 import { useToast } from '../context/ToastContext'
 import { Card, CardTitle, Btn, StatsBar, Stat } from '../components/ui'
 import styles from './Labels.module.css'
+import { STATION_STORAGE_KEY } from '../services/api'
 
 const API = import.meta.env.VITE_API_URL ?? '/api'
 
+function withStationHeaders(options = {}) {
+  const stationIdentifier = window.localStorage.getItem(STATION_STORAGE_KEY) || ''
+  return {
+    ...options,
+    headers: {
+      ...(stationIdentifier ? { 'X-Station-Identifier': stationIdentifier } : {}),
+      ...(options?.headers || {}),
+    },
+  }
+}
+
 async function request(path, options) {
-  const res = await fetch(`${API}${path}`, options)
+  const res = await fetch(`${API}${path}`, withStationHeaders(options))
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Erro no servidor' }))
     throw new Error(err.detail || 'Erro no servidor')

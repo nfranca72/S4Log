@@ -75,6 +75,7 @@ class Settings(BaseSettings):
     interval_stock_movements: int = 120
     interval_purchase_orders: int = 120
     interval_account_balances: int = 3600
+    interval_dashboard_movements: int = 120
 
     # Toggles
     sync_items_enabled: bool = False
@@ -84,6 +85,7 @@ class Settings(BaseSettings):
     sync_stock_movements_enabled: bool = False
     sync_purchase_orders_enabled: bool = False
     sync_account_balances_enabled: bool = False
+    sync_dashboard_movements_enabled: bool = False
 
     # SAP Series (comma-separated strings → parsed as lists)
     sap_transfer_series: str = ""

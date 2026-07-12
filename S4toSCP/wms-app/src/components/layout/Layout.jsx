@@ -78,6 +78,20 @@ function IconFactory() {
   )
 }
 
+function IconScanStack() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 7V5a1 1 0 011-1h2" />
+      <path d="M20 7V5a1 1 0 00-1-1h-2" />
+      <path d="M4 17v2a1 1 0 001 1h2" />
+      <path d="M20 17v2a1 1 0 01-1 1h-2" />
+      <path d="M7 12h10" />
+      <path d="M9 8h6" />
+      <path d="M9 16h6" />
+    </svg>
+  )
+}
+
 function IconMenu() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -91,6 +105,7 @@ function IconMenu() {
 const nav = [
   { to: '/importacao',   label: 'Importação',        icon: <IconUpload /> },
   { to: '/recepcao',     label: 'Receção',            icon: <IconInbox /> },
+  { to: '/contagem',     label: 'Contagem',           icon: <IconScanStack /> },
   { to: '/movimentos',   label: 'Mov. Simplificados', icon: <IconArrows /> },
   { to: '/abastecimento', label: 'Abastecimento',     icon: <IconFactory /> },
   { to: '/consulta',     label: 'Consulta',           icon: <IconSearch /> },

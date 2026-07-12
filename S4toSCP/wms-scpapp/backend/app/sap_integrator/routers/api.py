@@ -102,6 +102,7 @@ def _build_status_payload() -> Dict[str, Any]:
         "stock_movements",
         "purchase_orders",
         "account_balances",
+        "dashboard_movements",
     ]:
         db_state = states.get(name)
         live = LIVE_STATE.get(name, {})
@@ -179,6 +180,7 @@ class ConfigUpdateRequest(BaseModel):
     interval_stock_movements: Optional[int] = None
     interval_purchase_orders: Optional[int] = None
     interval_account_balances: Optional[int] = None
+    interval_dashboard_movements: Optional[int] = None
     # Series
     sap_transfer_series: Optional[str] = None
     sap_goods_receipt_series: Optional[str] = None
@@ -272,6 +274,7 @@ async def get_config():
         "interval_stock_movements":     s.interval_stock_movements,
         "interval_purchase_orders":     s.interval_purchase_orders,
         "interval_account_balances":    s.interval_account_balances,
+        "interval_dashboard_movements": s.interval_dashboard_movements,
         "sync_items_enabled":           s.sync_items_enabled,
         "sync_wms_items_enabled":       s.sync_wms_items_enabled,
         "sync_partners_enabled":        s.sync_partners_enabled,
@@ -279,6 +282,7 @@ async def get_config():
         "sync_stock_movements_enabled": s.sync_stock_movements_enabled,
         "sync_purchase_orders_enabled": s.sync_purchase_orders_enabled,
         "sync_account_balances_enabled": s.sync_account_balances_enabled,
+        "sync_dashboard_movements_enabled": s.sync_dashboard_movements_enabled,
         "sap_transfer_series":          s.sap_transfer_series,
         "sap_goods_receipt_series":     s.sap_goods_receipt_series,
         "sap_goods_issue_series":       s.sap_goods_issue_series,
@@ -326,6 +330,7 @@ VALID_INTEGRATIONS = {
     "stock_movements",
     "purchase_orders",
     "account_balances",
+    "dashboard_movements",
 }
 
 

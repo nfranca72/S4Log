@@ -167,6 +167,23 @@ class CancelBoxConfirmationResult(BaseModel):
     order_id: Optional[int] = None
 
 
+class CountingKnownItemSummary(BaseModel):
+    item_id: str
+    item_desc: str
+    client_ref: str
+    barcode: str
+    qty_counted: int
+
+
+class CountingSnapshot(BaseModel):
+    tunnel_id: int
+    total_tags: int
+    known_tags: int
+    new_tags: int
+    known_items: list[CountingKnownItemSummary] = []
+    new_tag_list: list[str] = []
+
+
 # ── Módulo 1B — Encomenda ESCP ─────────────────────────────────────────────────
 
 class OrderRow(BaseModel):

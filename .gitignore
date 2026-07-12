@@ -17,3 +17,4 @@ obj/
 *.lscache
 *.db-shm
 *.db-wal
+S4toSCP/wms-scpapp/backend/data/*.db

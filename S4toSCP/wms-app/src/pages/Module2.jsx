@@ -2,11 +2,23 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useToast } from '../context/ToastContext'
 import { Card, CardTitle, Btn, Spinner } from '../components/ui'
 import styles from './Module2.module.css'
+import { STATION_STORAGE_KEY } from '../services/api'
 
 const API = import.meta.env.VITE_API_URL ?? '/api'
 
+function withStationHeaders(options = {}) {
+  const stationIdentifier = window.localStorage.getItem(STATION_STORAGE_KEY) || ''
+  return {
+    ...options,
+    headers: {
+      ...(stationIdentifier ? { 'X-Station-Identifier': stationIdentifier } : {}),
+      ...(options?.headers || {}),
+    },
+  }
+}
+
 async function request(path, options) {
-  const res = await fetch(`${API}${path}`, options)
+  const res = await fetch(`${API}${path}`, withStationHeaders(options))
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Erro no servidor' }))
     throw new Error(err.detail || 'Erro no servidor')
@@ -75,7 +87,7 @@ export default function Module2() {
 
   // ── Load warehouses on mount ──────────────────────────────────────────────
   useEffect(() => {
-    fetch(`${API}/warehouses`).then(r => r.json()).then(setWarehouses).catch(() => {})
+    fetch(`${API}/warehouses`, withStationHeaders()).then(r => r.json()).then(setWarehouses).catch(() => {})
     request('/labels/volume-print-configs')
       .then(configs => {
         setLabelConfigs(configs)
@@ -88,7 +100,7 @@ export default function Module2() {
 
   useEffect(() => {
     if (!whId) { setLocations([]); setLocationId(''); return }
-    fetch(`${API}/warehouses/${whId}/locations`).then(r => r.json()).then(setLocations).catch(() => {})
+    fetch(`${API}/warehouses/${whId}/locations`, withStationHeaders()).then(r => r.json()).then(setLocations).catch(() => {})
   }, [whId])
 
   // ── Scroll to active box ──────────────────────────────────────────────────
@@ -103,13 +115,13 @@ export default function Module2() {
     if (!barcode.trim()) return
     setScanning(true)
     try {
-      const found = await fetch(`${API}/packing/by-barcode/${barcode.trim()}`).then(r => {
+      const found = await fetch(`${API}/packing/by-barcode/${barcode.trim()}`, withStationHeaders()).then(r => {
         if (!r.ok) throw new Error()
         return r.json()
       })
 
       // Load boxes
-      const boxList = await fetch(`${API}/packing/${found.order_id}/boxes`).then(r => r.json())
+      const boxList = await fetch(`${API}/packing/${found.order_id}/boxes`, withStationHeaders()).then(r => r.json())
 
       setPacking(found)
       setBoxes(boxList)
@@ -137,7 +149,7 @@ export default function Module2() {
     setItemTags({})
 
     try {
-      const detail = await fetch(`${API}/packing/${orderId}/boxes/${volNum}`).then(r => r.json())
+      const detail = await fetch(`${API}/packing/${orderId}/boxes/${volNum}`, withStationHeaders()).then(r => r.json())
 
       setActiveVolNum(volNum)
       setActiveBox(detail)
@@ -189,7 +201,7 @@ export default function Module2() {
 
   // Carrega túneis disponíveis ao iniciar
   useEffect(() => {
-    fetch(`${API}/config/tunnels`).then(r => r.json()).then(d => {
+    fetch(`${API}/config/tunnels`, withStationHeaders()).then(r => r.json()).then(d => {
       if (Array.isArray(d) && d.length) {
         setTunnels(d)
         setSelectedTunnel(d[0].tunnel_id)
@@ -359,7 +371,7 @@ export default function Module2() {
     try {
       const res = await fetch(
         `${API}/packing/${packing.order_id}/boxes/${activeBox.vol_num}/confirm`,
-        {
+        withStationHeaders({
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -370,7 +382,7 @@ export default function Module2() {
             rfid_tags: rfidTagsRef.current,
             item_tags: finalItemTags,
           }),
-        }
+        })
       ).then(r => r.json())
 
       toast(res.has_incident ? 'Caixa confirmada com incidências' : 'Caixa conferida com sucesso',
@@ -383,7 +395,7 @@ export default function Module2() {
       }
 
       // Reload boxes
-      const boxList = await fetch(`${API}/packing/${packing.order_id}/boxes`).then(r => r.json())
+      const boxList = await fetch(`${API}/packing/${packing.order_id}/boxes`, withStationHeaders()).then(r => r.json())
       setBoxes(boxList)
       setActiveBox(null)
       setActiveItem(null)
@@ -405,7 +417,7 @@ export default function Module2() {
     try {
       const res = await fetch(
         `${API}/packing/${packing.order_id}/boxes/${activeBox.vol_num}/cancel-confirmation`,
-        { method: 'POST' }
+        withStationHeaders({ method: 'POST' })
       )
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: 'Erro no servidor' }))
@@ -413,7 +425,7 @@ export default function Module2() {
       }
 
       toast('Entrada da caixa anulada com sucesso', 'success')
-      const boxList = await fetch(`${API}/packing/${packing.order_id}/boxes`).then(r => r.json())
+      const boxList = await fetch(`${API}/packing/${packing.order_id}/boxes`, withStationHeaders()).then(r => r.json())
       setBoxes(boxList)
       await openBox(packing.order_id, activeBox.vol_num)
       setItemQtys({})

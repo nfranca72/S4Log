@@ -10,6 +10,7 @@ const integrationMeta = {
   transfers: { label: 'Transferencias de stock', accent: 'green' },
   stock_movements: { label: 'Entradas e saidas', accent: 'red' },
   purchase_orders: { label: 'Ordens de compra', accent: 'amber' },
+  dashboard_movements: { label: 'Acumulados DocMovs', accent: 'blue' },
 }
 
 const initialConfig = {
@@ -23,12 +24,14 @@ const initialConfig = {
   wms_db_user: '',
   wms_db_password: '',
   wms_db_driver: 'ODBC Driver 17 for SQL Server',
+  dashboard_db_name: 'Ons3_Dash',
   interval_items: 1800,
   interval_wms_items: 1800,
   interval_partners: 1800,
   interval_transfers: 120,
   interval_stock_movements: 120,
   interval_purchase_orders: 120,
+  interval_dashboard_movements: 120,
   sap_transfer_series: '',
   sap_goods_receipt_series: '',
   sap_goods_issue_series: '',
@@ -255,12 +258,14 @@ export default function SAPB1() {
       wms_db_name: config.wms_db_name,
       wms_db_user: config.wms_db_user,
       wms_db_driver: config.wms_db_driver,
+      dashboard_db_name: config.dashboard_db_name,
       interval_items: Number(config.interval_items),
       interval_wms_items: Number(config.interval_wms_items),
       interval_partners: Number(config.interval_partners),
       interval_transfers: Number(config.interval_transfers),
       interval_stock_movements: Number(config.interval_stock_movements),
       interval_purchase_orders: Number(config.interval_purchase_orders),
+      interval_dashboard_movements: Number(config.interval_dashboard_movements),
       sap_transfer_series: config.sap_transfer_series,
       sap_goods_receipt_series: config.sap_goods_receipt_series,
       sap_goods_issue_series: config.sap_goods_issue_series,
@@ -379,6 +384,10 @@ export default function SAPB1() {
               <input value={config.wms_db_name} onChange={e => setConfig({ ...config, wms_db_name: e.target.value })} />
             </label>
             <label>
+              <span>Base dashboard</span>
+              <input value={config.dashboard_db_name} onChange={e => setConfig({ ...config, dashboard_db_name: e.target.value })} />
+            </label>
+            <label>
               <span>Utilizador SQL</span>
               <input value={config.wms_db_user} onChange={e => setConfig({ ...config, wms_db_user: e.target.value })} />
             </label>
@@ -409,6 +418,10 @@ export default function SAPB1() {
             <label>
               <span>Intervalo ordens compra</span>
               <input type="number" min="10" value={config.interval_purchase_orders} onChange={e => setConfig({ ...config, interval_purchase_orders: e.target.value })} />
+            </label>
+            <label>
+              <span>Intervalo DocMovs</span>
+              <input type="number" min="10" value={config.interval_dashboard_movements} onChange={e => setConfig({ ...config, interval_dashboard_movements: e.target.value })} />
             </label>
             <label>
               <span>Series transferencias</span>

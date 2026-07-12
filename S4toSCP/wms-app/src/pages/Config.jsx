@@ -2,22 +2,70 @@ import { useState, useEffect } from 'react'
 import { useToast } from '../context/ToastContext'
 import { Card, CardTitle, Btn, Spinner } from '../components/ui'
 import styles from './Config.module.css'
+import { STATION_STORAGE_KEY } from '../services/api'
 
 const API = '/api'
 
 export default function Config() {
   const toast   = useToast()
   const [cfg, setCfg]       = useState(null)
+  const [tunnels, setTunnels] = useState([])
+  const [selectedTunnel, setSelectedTunnel] = useState('')
+  const [stationCfg, setStationCfg] = useState({ station_identifier: '' })
   const [loading, setLoading] = useState(true)
   const [saving, setSaving]   = useState(false)
 
   useEffect(() => {
-    fetch(`${API}/config/rfid`)
-      .then(r => r.json())
-      .then(setCfg)
+    Promise.all([
+      fetch(`${API}/config/tunnels`).then(async r => {
+        if (!r.ok) throw new Error()
+        return r.json()
+      }),
+      Promise.resolve({
+        station_identifier: window.localStorage.getItem(STATION_STORAGE_KEY) || '',
+      }),
+    ])
+      .then(([tunnelList, station]) => {
+        const nextTunnels = Array.isArray(tunnelList) ? tunnelList : []
+        setTunnels(nextTunnels)
+        setSelectedTunnel(nextTunnels[0]?.tunnel_id ? String(nextTunnels[0].tunnel_id) : '')
+        setStationCfg(station)
+      })
       .catch(() => toast('Erro ao carregar configuração', 'error'))
       .finally(() => setLoading(false))
-  }, [])
+  }, [toast])
+
+  useEffect(() => {
+    if (!selectedTunnel) {
+      setCfg(null)
+      return
+    }
+
+    let cancelled = false
+    setLoading(true)
+
+    fetch(`${API}/config/tunnels/${selectedTunnel}/rfid`)
+      .then(async r => {
+        if (!r.ok) throw new Error()
+        return r.json()
+      })
+      .then(rfidCfg => {
+        if (!cancelled) setCfg(rfidCfg)
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCfg(null)
+          toast('Erro ao carregar configuração do túnel', 'error')
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [selectedTunnel, toast])
 
   const updateAntenna = (idx, field, value) => {
     setCfg(prev => ({
@@ -29,27 +77,76 @@ export default function Config() {
   }
 
   const save = async () => {
+    if (!cfg || !selectedTunnel) return
+
     setSaving(true)
     try {
-      await fetch(`${API}/config/rfid`, {
-        method: 'POST',
+      const saveConfigRequest = fetch(`${API}/config/tunnels/${selectedTunnel}/rfid`, {
+        method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(cfg),
+      }).then(async r => {
+        if (!r.ok) throw new Error()
+        return r.json()
       })
-      toast('Configuração guardada — reinicia o backend para aplicar')
+
+      const [savedConfig] = await Promise.all([
+        saveConfigRequest,
+        Promise.resolve(window.localStorage.setItem(STATION_STORAGE_KEY, stationCfg.station_identifier || '')),
+      ])
+      setCfg(savedConfig)
+      toast('Configuração guardada')
     } catch { toast('Erro ao guardar configuração', 'error') }
     finally { setSaving(false) }
   }
 
   if (loading) return <div className={styles.center}><Spinner size={32} /></div>
-  if (!cfg)    return null
+  if (!tunnels.length) {
+    return (
+      <div>
+        <div className={styles.pageHeader}>
+          <h1 className={styles.pageTitle}>Configuração RFID</h1>
+          <p className={styles.pageDesc}>Não existem túneis RFID ativos para configurar.</p>
+        </div>
+      </div>
+    )
+  }
+  if (!cfg) return null
+
+  const tunnelMeta = tunnels.find(tunnel => String(tunnel.tunnel_id) === String(selectedTunnel))
 
   return (
     <div>
       <div className={styles.pageHeader}>
         <h1 className={styles.pageTitle}>Configuração RFID</h1>
-        <p className={styles.pageDesc}>Zebra FX7500 — {cfg.host}:{cfg.port}</p>
+        <p className={styles.pageDesc}>
+          {tunnelMeta?.tunnel_code ? `${tunnelMeta.tunnel_code} — ` : ''}
+          Zebra FX7500 — {cfg.host}:{cfg.port}
+        </p>
       </div>
+
+      <Card>
+        <CardTitle>Túnel RFID</CardTitle>
+        <div className={styles.row}>
+          <div className={styles.field}>
+            <label>Túnel configurado</label>
+            <select
+              className={styles.input}
+              value={selectedTunnel}
+              onChange={e => setSelectedTunnel(e.target.value)}
+            >
+              {tunnels.map(tunnel => (
+                <option key={tunnel.tunnel_id} value={tunnel.tunnel_id}>
+                  {tunnel.tunnel_code ? `${tunnel.tunnel_code} — ` : ''}{tunnel.tunnel_desc || `Túnel ${tunnel.tunnel_id}`}
+                </option>
+              ))}
+            </select>
+            <span className={styles.inputNote}>
+              A configuração das antenas é guardada na tabela `RFIDTunnels` do túnel selecionado.
+            </span>
+          </div>
+        </div>
+      </Card>
 
       {/* Ligação */}
       <Card>
@@ -71,6 +168,24 @@ export default function Config() {
               value={cfg.port}
               onChange={e => setCfg(p => ({ ...p, port: parseInt(e.target.value) || 5084 }))}
             />
+          </div>
+        </div>
+      </Card>
+
+      <Card>
+        <CardTitle>Identificação do posto</CardTitle>
+        <div className={styles.row}>
+          <div className={styles.field}>
+            <label>MAC / identificador do posto</label>
+            <input
+              className={styles.input}
+              value={stationCfg.station_identifier}
+              onChange={e => setStationCfg({ station_identifier: e.target.value })}
+              placeholder="Ex: 00-1A-2B-3C-4D-5E"
+            />
+            <span className={styles.inputNote}>
+              Introduz o valor de `Posts.Post` deste posto. Fica guardado neste browser/posto e é enviado ao backend em cada impressão.
+            </span>
           </div>
         </div>
       </Card>
@@ -142,7 +257,7 @@ export default function Config() {
         <Btn variant="success" loading={saving} onClick={save}>
           Guardar configuração
         </Btn>
-        <p className={styles.saveNote}>Após guardar reinicia o backend para aplicar as alterações</p>
+        <p className={styles.saveNote}>O identificador do posto fica guardado localmente neste browser.</p>
       </div>
     </div>
   )

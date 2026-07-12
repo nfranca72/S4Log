@@ -1,9 +1,27 @@
 // Em desenvolvimento usa o proxy do vite (/api → localhost:8000)
 // Em produção usa o URL directo do backend
 const BASE = import.meta.env.VITE_API_URL ?? '/api'
+const STATION_STORAGE_KEY = 's4log_station_identifier'
+
+function stationIdentifierHeader() {
+  const value = typeof window !== 'undefined'
+    ? (window.localStorage.getItem(STATION_STORAGE_KEY) || '').trim()
+    : ''
+  return value ? { 'X-Station-Identifier': value } : {}
+}
+
+function withStationHeaders(options = {}) {
+  return {
+    ...options,
+    headers: {
+      ...stationIdentifierHeader(),
+      ...(options.headers || {}),
+    },
+  }
+}
 
 async function request(path, options = {}) {
-  const res = await fetch(`${BASE}${path}`, options)
+  const res = await fetch(`${BASE}${path}`, withStationHeaders(options))
   if (!res.ok) {
     const text = await res.text()
     let err
@@ -16,6 +34,8 @@ async function request(path, options = {}) {
   }
   return res.json()
 }
+
+export { STATION_STORAGE_KEY }
 
 /* ── Clientes ── */
 export const clientsApi = {
@@ -138,6 +158,23 @@ export const supplyApi = {
     }),
   volumePrintConfigs: (docType = 'CX') =>
     request(`/abastecimento/volume-print-configs?doc_type=${encodeURIComponent(docType)}`),
+}
+
+/* ── Contagem RFID ── */
+export const countingApi = {
+  start: (tunnelId) =>
+    request(`/counting/tunnels/${tunnelId}/start`, {
+      method: 'POST',
+    }),
+  reset: (tunnelId) =>
+    request(`/counting/tunnels/${tunnelId}/reset`, {
+      method: 'POST',
+    }),
+  stop: (tunnelId) =>
+    request(`/counting/tunnels/${tunnelId}/stop`, {
+      method: 'POST',
+    }),
+  snapshot: (tunnelId) => request(`/counting/tunnels/${tunnelId}/snapshot`),
 }
 
 /* ── SAP B1 Integrator ── */

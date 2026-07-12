@@ -131,6 +131,7 @@ class IntegrationName(str, enum.Enum):
     stock_movements = "stock_movements"
     purchase_orders = "purchase_orders"
     account_balances = "account_balances"
+    dashboard_movements = "dashboard_movements"
 
 
 class ErrorStatus(str, enum.Enum):
@@ -200,6 +201,18 @@ class SyncState(Base):
     last_cycle_failed = Column(Integer, default=0)   # last cycle only
     status = Column(String(20), default="idle")      # idle | running | error
     current_task = Column(String(255), nullable=True)
+
+
+class IntegrationCursor(Base):
+    """Stores source-specific checkpoints for integrations with incremental logic."""
+    __tablename__ = "integration_cursor"
+
+    integration = Column(String(50), primary_key=True)
+    source_key = Column(String(255), nullable=False)
+    last_success_at = Column(DateTime, nullable=True)
+    full_load_completed = Column(Integer, default=0, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
 
 
 class PurchaseOrderSync(Base):

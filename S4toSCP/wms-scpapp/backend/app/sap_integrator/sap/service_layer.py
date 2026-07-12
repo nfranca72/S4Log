@@ -206,9 +206,10 @@ class ServiceLayerClient:
                 break
             for record in page:
                 yield record
-            if len(page) < page_size:
-                break
-            skip += page_size
+            # Some SAP B1 Service Layer collections enforce a lower server-side
+            # page cap than the requested $top. Advance by the actual page size
+            # and stop only when the next page comes back empty.
+            skip += len(page)
 
     async def get_by_key(self, entity: str, key: str | int) -> Dict[str, Any]:
         """Fetch a single entity by its primary key."""

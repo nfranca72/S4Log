@@ -3,16 +3,16 @@ import asyncio
 import json
 import logging
 import os
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
 from app.models.schemas import (
     PackingListSummary, BoxSummary, BoxDetail,
     WarehouseInfo, LocationInfo,
-    ConfirmBoxRequest, ConfirmBoxResult, CancelBoxConfirmationResult
+    ConfirmBoxRequest, ConfirmBoxResult, CancelBoxConfirmationResult, CountingSnapshot
 )
 from app.services.reception_service import (
     get_packing_lists, get_boxes, get_box_detail,
     get_warehouses, get_locations, confirm_box,
-    find_packing_by_barcode, cancel_box_confirmation
+    find_packing_by_barcode, cancel_box_confirmation, summarize_counting_tags
 )
 from app.services.rfid_bridge_client import (
     RfidBridgeClient,
@@ -49,8 +49,12 @@ def box_detail(order_id: int, vol_num: int):
     return box
 
 @router.post("/packing/{order_id}/boxes/{vol_num}/confirm", response_model=ConfirmBoxResult)
-def confirm_box_endpoint(order_id: int, vol_num: int, req: ConfirmBoxRequest):
-    result = confirm_box(vol_num, req)
+def confirm_box_endpoint(order_id: int, vol_num: int, req: ConfirmBoxRequest, request: Request):
+    result = confirm_box(
+        vol_num,
+        req,
+        station_identifier=str(request.headers.get("X-Station-Identifier") or "").strip(),
+    )
     if not result.success:
         raise HTTPException(status_code=400, detail=result.message)
     return result
@@ -149,6 +153,14 @@ def _build_bridge_config(tunnel_id: int) -> TunnelRfidConfig:
     )
 
 
+def _extract_bridge_tags(snapshot: dict) -> set[str]:
+    return {
+        str(tag.get("epc", "")).strip()
+        for tag in snapshot.get("tags", [])
+        if str(tag.get("epc", "")).strip()
+    }
+
+
 async def _broadcast_tunnel_tags(tunnel_id: int, tags: set[str], event_type: str = "tags"):
     tunnel = _tunnels.get(tunnel_id)
     if not tunnel:
@@ -173,11 +185,7 @@ async def _poll_bridge_tags(tunnel_id: int):
 
             bridge_client = _bridge_client_for_tunnel(tunnel_id)
             snapshot = await asyncio.to_thread(bridge_client.get_tags)
-            tags = {
-                str(tag.get("epc", "")).strip()
-                for tag in snapshot.get("tags", [])
-                if str(tag.get("epc", "")).strip()
-            }
+            tags = _extract_bridge_tags(snapshot)
             tags = _filter_registered_rfid_tags(tags)
             if tags != tunnel["last_tags"]:
                 tunnel["last_tags"] = tags
@@ -219,11 +227,7 @@ async def rfid_websocket(websocket: WebSocket, tunnel_id: int = 1):
         await websocket.close(code=1011, reason=str(exc)[:120])
         return
 
-    tags = {
-        str(tag.get("epc", "")).strip()
-        for tag in snapshot.get("tags", [])
-        if str(tag.get("epc", "")).strip()
-    }
+    tags = _extract_bridge_tags(snapshot)
     tags = _filter_registered_rfid_tags(tags)
     tunnel["last_tags"] = tags
     await _ensure_tunnel_poller(tunnel_id)
@@ -281,6 +285,36 @@ async def rfid_websocket(websocket: WebSocket, tunnel_id: int = 1):
                 except asyncio.CancelledError:
                     pass
             _tunnels.pop(tunnel_id, None)
+
+
+@router.post("/counting/tunnels/{tunnel_id}/start")
+async def start_counting_tunnel(tunnel_id: int):
+    config = _build_bridge_config(tunnel_id)
+    bridge_client = _bridge_client_for_tunnel(tunnel_id)
+    await asyncio.to_thread(bridge_client.start, config)
+    return {"success": True}
+
+
+@router.post("/counting/tunnels/{tunnel_id}/reset")
+async def reset_counting_tunnel(tunnel_id: int):
+    config = _build_bridge_config(tunnel_id)
+    bridge_client = _bridge_client_for_tunnel(tunnel_id)
+    await asyncio.to_thread(bridge_client.reset, config)
+    return {"success": True}
+
+
+@router.post("/counting/tunnels/{tunnel_id}/stop")
+async def stop_counting_tunnel(tunnel_id: int):
+    bridge_client = _bridge_client_for_tunnel(tunnel_id)
+    await asyncio.to_thread(bridge_client.stop)
+    return {"success": True}
+
+
+@router.get("/counting/tunnels/{tunnel_id}/snapshot", response_model=CountingSnapshot)
+async def counting_tunnel_snapshot(tunnel_id: int):
+    bridge_client = _bridge_client_for_tunnel(tunnel_id)
+    snapshot = await asyncio.to_thread(bridge_client.get_tags)
+    return summarize_counting_tags(sorted(_extract_bridge_tags(snapshot)), tunnel_id=tunnel_id)
 
 
 @router.get("/packing/by-barcode/{barcode}")

@@ -3,7 +3,7 @@ from app.db.connection import db_cursor
 from app.models.schemas import (
     PackingListSummary, BoxSummary, BoxDetail, BoxItem,
     WarehouseInfo, LocationInfo, ConfirmBoxRequest, ConfirmBoxResult,
-    CancelBoxConfirmationResult
+    CancelBoxConfirmationResult, CountingKnownItemSummary, CountingSnapshot
 )
 from app.services.label_printing import print_volume_label
 
@@ -29,6 +29,70 @@ def _existing_rfid_tags(cursor, tags: list[str]) -> set[str]:
         tags,
     )
     return {str(row[0]).strip() for row in cursor.fetchall() if row[0]}
+
+
+def summarize_counting_tags(tags: list[str], tunnel_id: int) -> CountingSnapshot:
+    clean_tags = _clean_tags(tags)
+    if not clean_tags:
+        return CountingSnapshot(tunnel_id=tunnel_id, total_tags=0, known_tags=0, new_tags=0)
+
+    placeholders = ",".join("?" for _ in clean_tags)
+    with db_cursor() as (cursor, _):
+        cursor.execute(
+            f"""
+            SELECT
+                rt.TAG,
+                ISNULL(rt.ItemID, '') AS ItemID,
+                ISNULL(im.ItemDesc, '') AS ItemDesc,
+                ISNULL(im.ClientRef, '') AS ClientRef,
+                ISNULL(im.Barcode, '') AS Barcode
+            FROM ItemMasterRFIDTags rt
+            LEFT JOIN ItemMaster im ON im.ItemID = rt.ItemID
+            WHERE ISNULL(rt.deleted, 0) = 0
+              AND rt.TAG IN ({placeholders})
+            """,
+            clean_tags,
+        )
+        rows = cursor.fetchall()
+
+    known_by_tag = {}
+    items = {}
+    for row in rows:
+        tag = str(row[0] or "").strip()
+        if not tag:
+            continue
+        known_by_tag[tag] = True
+        key = (
+            str(row[1] or "").strip(),
+            str(row[2] or "").strip(),
+            str(row[3] or "").strip(),
+            str(row[4] or "").strip(),
+        )
+        items[key] = items.get(key, 0) + 1
+
+    known_items = [
+        CountingKnownItemSummary(
+            item_id=item_id,
+            item_desc=item_desc,
+            client_ref=client_ref,
+            barcode=barcode,
+            qty_counted=qty_counted,
+        )
+        for (item_id, item_desc, client_ref, barcode), qty_counted in sorted(
+            items.items(),
+            key=lambda entry: (-entry[1], entry[0][0], entry[0][2], entry[0][3]),
+        )
+    ]
+    new_tag_list = [tag for tag in clean_tags if tag not in known_by_tag]
+
+    return CountingSnapshot(
+        tunnel_id=tunnel_id,
+        total_tags=len(clean_tags),
+        known_tags=len(clean_tags) - len(new_tag_list),
+        new_tags=len(new_tag_list),
+        known_items=known_items,
+        new_tag_list=new_tag_list,
+    )
 
 
 def get_packing_lists() -> list[PackingListSummary]:
@@ -199,7 +263,11 @@ def get_locations(wh_id: int) -> list[LocationInfo]:
         return [LocationInfo(location_id=r[0], location_desc=r[1] or r[0]) for r in cursor.fetchall()]
 
 
-def confirm_box(vol_num: int, req: ConfirmBoxRequest) -> ConfirmBoxResult:
+def confirm_box(
+    vol_num: int,
+    req: ConfirmBoxRequest,
+    station_identifier: str | None = None,
+) -> ConfirmBoxResult:
     """
     Confirma uma caixa apos conferencia.
     As TAGs ja existentes em ItemMasterRFIDTags nao contam para nova entrada.
@@ -289,6 +357,7 @@ def confirm_box(vol_num: int, req: ConfirmBoxRequest) -> ConfirmBoxResult:
                     SELECT Qty FROM Inventory
                     WHERE WHID = ? AND LocationID = ? AND ItemID = ?
                       AND VolNum = ? AND ColorID = ? AND SizeID = ?
+                      AND ISNULL(Country, '') = ''
                 """, (req.wh_id, req.location_id, item_id,
                       str(vol_num), '', ''))
                 existing = cursor.fetchone()
@@ -299,6 +368,7 @@ def confirm_box(vol_num: int, req: ConfirmBoxRequest) -> ConfirmBoxResult:
                         SET Qty = Qty + ?, LastInput = GETDATE()
                         WHERE WHID = ? AND LocationID = ? AND ItemID = ?
                           AND VolNum = ? AND ColorID = ? AND SizeID = ?
+                          AND ISNULL(Country, '') = ''
                     """, (qty_read, req.wh_id, req.location_id, item_id,
                           str(vol_num), '', ''))
                 else:
@@ -565,7 +635,7 @@ def confirm_box(vol_num: int, req: ConfirmBoxRequest) -> ConfirmBoxResult:
         "message": "",
     }
     try:
-        print_result = print_volume_label(vol_num)
+        print_result = print_volume_label(vol_num, station_identifier=station_identifier)
     except Exception as exc:
         print_result = {
             "attempted": True,
