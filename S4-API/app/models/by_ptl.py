@@ -119,7 +119,7 @@ class ByPtlWaveRequest(BaseModel):
     from_location: Optional[str] = Field(
         default=None,
         alias="FRomLocation",
-        validation_alias=AliasChoices("FRomLocation", "FromLocation"),
+        validation_alias=AliasChoices("FRomLocation", "FromLocation", "fromLocation"),
         max_length=250,
     )
     ptl: str = Field(..., alias="PTL", min_length=1, max_length=10)

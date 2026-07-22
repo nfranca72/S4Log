@@ -42,6 +42,7 @@ class MovementType(BaseModel):
     use_dims: bool
     with_value: bool
     allow_stock_move: bool
+    link_itemid_as_component: bool
 
 class MovementLine(BaseModel):
     item_id: str
@@ -117,7 +118,8 @@ def list_movement_types():
                        ISNULL(HasLots, 0)                AS HasLots,
                        ISNULL(UseDims, 0)                AS UseDims,
                        ISNULL(WithValue, 0)              AS WithValue,
-                       ISNULL(AllowStockMove, 0)         AS AllowStock
+                       ISNULL(AllowStockMove, 0)         AS AllowStock,
+                       ISNULL(LinkItemidAsComponent, 0)  AS LinkItemidAsComponent
                 FROM DocumentConfig
                 WHERE IsSimplifiedMovement = 1 AND Active = 1
                 ORDER BY Title
@@ -146,6 +148,7 @@ def list_movement_types():
             use_dims=bool(r[12]),
             with_value=bool(r[13]),
             allow_stock_move=bool(r[14]),
+            link_itemid_as_component=bool(r[15]),
         )
         for r in rows
     ]
@@ -199,6 +202,7 @@ def list_partners(
 def list_documents(
     doc_type: str = Query(...),
     partner_id: str = Query(default=""),
+    search: str = Query(default=""),
 ):
     with db_cursor() as (cursor, _):
         cursor.execute(
@@ -215,38 +219,41 @@ def list_documents(
 
         placeholders = ",".join("?" for _ in origin_doc_types)
 
+        where_parts = [
+            f"co.DocType IN ({placeholders})",
+            "UPPER(LTRIM(RTRIM(ISNULL(CAST(co.Status AS varchar(50)),'')))) NOT IN ('ANULADA','CANCELADA','FECHADA')",
+        ]
+        params: list[object] = list(origin_doc_types)
         if partner_id:
-            cursor.execute(f"""
-                SELECT co.OrderID, co.DocType, co.ClientID,
-                       co.OrderDateTime, co.Obs,
-                       COUNT(cod.OrderRow) AS total_lines,
-                       SUM(CASE WHEN ISNULL(cod.QtyOrd,0) > ISNULL(cod.QtySatisf,0)
-                                THEN 1 ELSE 0 END) AS pending_lines
-                FROM ClientOrders co
-                JOIN ClientOrderDetails cod
-                  ON cod.OrderID = co.OrderID AND cod.DocType = co.DocType
-                WHERE co.DocType IN ({placeholders}) AND co.ClientID = ?
-                  AND UPPER(LTRIM(RTRIM(ISNULL(CAST(co.Status AS varchar(50)),''))))
-                      NOT IN ('ANULADA','CANCELADA','FECHADA')
-                GROUP BY co.OrderID, co.DocType, co.ClientID, co.OrderDateTime, co.Obs
-                ORDER BY co.OrderID DESC
-            """, (*origin_doc_types, partner_id))
-        else:
-            cursor.execute(f"""
-                SELECT co.OrderID, co.DocType, co.ClientID,
-                       co.OrderDateTime, co.Obs,
-                       COUNT(cod.OrderRow) AS total_lines,
-                       SUM(CASE WHEN ISNULL(cod.QtyOrd,0) > ISNULL(cod.QtySatisf,0)
-                                THEN 1 ELSE 0 END) AS pending_lines
-                FROM ClientOrders co
-                JOIN ClientOrderDetails cod
-                  ON cod.OrderID = co.OrderID AND cod.DocType = co.DocType
-                WHERE co.DocType IN ({placeholders})
-                  AND UPPER(LTRIM(RTRIM(ISNULL(CAST(co.Status AS varchar(50)),''))))
-                      NOT IN ('ANULADA','CANCELADA','FECHADA')
-                GROUP BY co.OrderID, co.DocType, co.ClientID, co.OrderDateTime, co.Obs
-                ORDER BY co.OrderID DESC
-            """, origin_doc_types)
+            where_parts.append("co.ClientID = ?")
+            params.append(partner_id)
+
+        search_text = search.strip()
+        if search_text:
+            search_like = f"%{search_text}%"
+            where_parts.append("""
+                (
+                    CAST(co.OrderID AS varchar(50)) LIKE ?
+                    OR co.DocType LIKE ?
+                    OR ISNULL(co.ClientID, '') LIKE ?
+                    OR ISNULL(co.Obs, '') LIKE ?
+                )
+            """)
+            params.extend([search_like, search_like, search_like, search_like])
+
+        cursor.execute(f"""
+            SELECT co.OrderID, co.DocType, co.ClientID,
+                   co.OrderDateTime, co.Obs,
+                   COUNT(cod.OrderRow) AS total_lines,
+                   SUM(CASE WHEN ISNULL(cod.QtyOrd,0) > ISNULL(cod.QtySatisf,0)
+                            THEN 1 ELSE 0 END) AS pending_lines
+            FROM ClientOrders co
+            JOIN ClientOrderDetails cod
+              ON cod.OrderID = co.OrderID AND cod.DocType = co.DocType
+            WHERE {' AND '.join(where_parts)}
+            GROUP BY co.OrderID, co.DocType, co.ClientID, co.OrderDateTime, co.Obs
+            ORDER BY co.OrderID DESC
+        """, tuple(params))
 
         rows = cursor.fetchall()
 
@@ -642,25 +649,21 @@ def list_box_items(
 ):
     with db_cursor() as (cursor, _):
         cursor.execute("""
-            SELECT vi.ItemID,
-                   ISNULL(im.ItemDesc, vi.ItemID) AS item_desc,
+            SELECT inv.ItemID,
+                   ISNULL(im.ItemDesc, inv.ItemID) AS item_desc,
                    ISNULL(im.StkUnit, 'UN') AS stk_unit,
                    ISNULL(im.Dimensions, 0) AS has_dims,
                    ISNULL(im.Lots, 0) AS has_lots,
                    ISNULL(im.VolNums, 0) AS has_volumes,
                    SUM(ISNULL(inv.Qty, 0)) AS qty_stock,
                    MIN(ISNULL(inv.LocationID, '')) AS location_id
-            FROM VolItem vi
-            JOIN Inventory inv
-              ON inv.ItemID = vi.ItemID
-             AND inv.VolNum = vi.VolNum
-             AND inv.WHID = ?
-             AND inv.Qty > 0
-            LEFT JOIN ItemMaster im ON im.ItemID = vi.ItemID
-            WHERE vi.VolDocCod = 'CX'
-              AND vi.VolNum = ?
-            GROUP BY vi.ItemID, im.ItemDesc, im.StkUnit, im.Dimensions, im.Lots, im.VolNums
-            ORDER BY vi.ItemID
+            FROM Inventory inv
+            LEFT JOIN ItemMaster im ON im.ItemID = inv.ItemID
+            WHERE inv.WHID = ?
+              AND inv.Qty > 0
+              AND CAST(inv.VolNum AS varchar(50)) = ?
+            GROUP BY inv.ItemID, im.ItemDesc, im.StkUnit, im.Dimensions, im.Lots, im.VolNums
+            ORDER BY inv.ItemID
         """, (wh_id, vol_num))
         rows = cursor.fetchall()
 
@@ -883,7 +886,7 @@ def execute_movement(req: ExecuteMovementRequest, request: Request):
             item_units = {r[0]: r[1] for r in rows}
             item_descs = {r[0]: r[2] for r in rows}
 
-        for line in req.lines:
+        for line_index, line in enumerate(req.lines, start=1):
             stk_unit = item_units.get(line.item_id, "UN")
             qty = float(line.qty)
             if qty <= 0:
@@ -971,6 +974,17 @@ def execute_movement(req: ExecuteMovementRequest, request: Request):
             mov_id_o = mov_row[0] if mov_row else None
             if mov_id_o:
                 mov_ids.append(mov_id_o)
+                if req.order_id and origin_doc_type and line.doc_row is not None:
+                    _insert_movement_origin_link(
+                        cursor,
+                        doc_type=req.doc_type,
+                        order_id=int(mov_id_o),
+                        order_row=line_index,
+                        origin_doc_type=origin_doc_type,
+                        origin_order_id=int(req.order_id),
+                        origin_order_row=int(line.doc_row or 0),
+                        qty=qty,
+                    )
 
             # ── Decrease source inventory ──────────────────────────────────────
             _adjust_inventory(
@@ -1152,6 +1166,58 @@ def _line_item_label(item_id: str, item_desc: str, color_id: str, size_id: str, 
 def _sort_box_number(value: str) -> tuple[int, str]:
     text = str(value or "").strip()
     return (0, f"{int(text):020d}") if text.isdigit() else (1, text)
+
+
+def _insert_movement_origin_link(
+    cursor,
+    *,
+    doc_type: str,
+    order_id: int,
+    order_row: int,
+    origin_doc_type: str,
+    origin_order_id: int,
+    origin_order_row: int,
+    qty: float,
+) -> None:
+    cursor.execute(
+        """
+        IF NOT EXISTS (
+            SELECT 1
+            FROM ClientOrderDetailsOri
+            WHERE DocType = ?
+              AND OrderID = ?
+              AND OrderRow = ?
+              AND DocTypeOri = ?
+              AND OrderIDOri = ?
+              AND OrderRowOri = ?
+        )
+        INSERT INTO ClientOrderDetailsOri (
+            DocType, OrderID, OrderRow, PartNum, VolNum,
+            DocTypeOri, OrderIDOri, OrderRowOri, PartNumOri, VolNumOri,
+            QtyOrd, QtyVols, QtyOrdDest
+        ) VALUES (
+            ?, ?, ?, 0, 0,
+            ?, ?, ?, 0, 0,
+            ?, 0, ?
+        )
+        """,
+        (
+            doc_type,
+            order_id,
+            order_row,
+            origin_doc_type,
+            origin_order_id,
+            origin_order_row,
+            doc_type,
+            order_id,
+            order_row,
+            origin_doc_type,
+            origin_order_id,
+            origin_order_row,
+            qty,
+            qty,
+        ),
+    )
 
 
 def _adjust_inventory(cursor, wh_id, location_id, item_id, lot, color_id, size_id, vol_num, delta):

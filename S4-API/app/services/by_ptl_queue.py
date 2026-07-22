@@ -86,6 +86,36 @@ def process_next_event() -> bool:
         return False
 
     try:
+        if event.area == "PACKING_LIST":
+            decision, canonical_sync_id = _reserve_packing_list_send(event)
+            if decision == "defer":
+                _release_event(event.sync_id)
+                LOGGER.info(
+                    "BY-PTL event %s (%s) deferred while canonical event %s is processing",
+                    event.sync_id,
+                    event.area,
+                    canonical_sync_id,
+                )
+                return False
+            if decision == "skip":
+                response_text = json.dumps(
+                    {
+                        "skipped_duplicate": True,
+                        "message": "PACKING_LIST already sent successfully",
+                        "canonical_sync_id": str(canonical_sync_id),
+                        "orders_picking_id": event.field(1, required=True),
+                    },
+                    ensure_ascii=False,
+                )
+                _finish_event(event.sync_id, succeeded=True, response=response_text)
+                LOGGER.warning(
+                    "BY-PTL duplicate event %s (%s) skipped; canonical event=%s",
+                    event.sync_id,
+                    event.area,
+                    canonical_sync_id,
+                )
+                return True
+
         payload = _build_event_payload(event)
         request = ByPtlDispatchRequest.model_validate(
             {"Action": event.area, "Data": payload}
@@ -106,6 +136,62 @@ def process_next_event() -> bool:
         LOGGER.exception("BY-PTL event %s (%s) failed", event.sync_id, event.area)
 
     return True
+
+
+def _reserve_packing_list_send(event: QueueEvent) -> tuple[str, Optional[UUID]]:
+    """
+    Elect exactly one active PACKING_LIST event per OrdersPicking ID.
+
+    Matching rows are locked until the decision commits. A later worker defers
+    while the oldest event is active, so it can retry if that event fails. Once
+    any matching event succeeds, every later event is completed as a duplicate
+    without making another HTTP request.
+    """
+    order_picking_id = event.field(1, required=True) or ""
+    with db_cursor() as (cursor, _conn):
+        cursor.execute(
+            """
+            SELECT SyncID, SyncStarted, SyncEnded, SyncSucceeded
+            FROM dbo.SyncQueue WITH (UPDLOCK, HOLDLOCK)
+            WHERE Area = N'PACKING_LIST'
+              AND LTRIM(RTRIM(CONVERT(nvarchar(100), Field01))) = ?
+            ORDER BY RequestDate, SyncID
+            """,
+            (order_picking_id,),
+        )
+        rows = cursor.fetchall()
+
+    for row in rows:
+        sync_id = UUID(str(row[0]))
+        if sync_id != event.sync_id and bool(row[2]) and bool(row[3]):
+            return "skip", sync_id
+
+    active_sync_ids = [
+        UUID(str(row[0]))
+        for row in rows
+        if bool(row[1]) and not bool(row[2])
+    ]
+    if active_sync_ids and active_sync_ids[0] != event.sync_id:
+        return "defer", active_sync_ids[0]
+
+    return "send", event.sync_id
+
+
+def _release_event(sync_id: UUID) -> None:
+    with db_cursor() as (cursor, _conn):
+        cursor.execute(
+            """
+            UPDATE dbo.SyncQueue
+            SET SyncStarted = 0,
+                SyncStartDate = NULL,
+                SyncSucceeded = 0,
+                SyncError = 0,
+                SyncResponse = N''
+            WHERE SyncID = ?
+              AND SyncEnded = 0
+            """,
+            (sync_id,),
+        )
 
 
 def _claim_next_event() -> Optional[QueueEvent]:
@@ -148,7 +234,7 @@ def _claim_next_event() -> Optional[QueueEvent]:
     if row is None:
         return None
     return QueueEvent(
-        sync_id=row[0],
+        sync_id=UUID(str(row[0])),
         area=str(row[1]).strip().upper(),
         fields=tuple(row[index] for index in range(2, 12)),
     )

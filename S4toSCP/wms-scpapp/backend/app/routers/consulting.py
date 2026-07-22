@@ -2,12 +2,288 @@ from __future__ import annotations
 import csv
 import io
 import logging
+from datetime import date, timedelta
+from typing import List, Optional
 from fastapi import APIRouter, Query, HTTPException
 from fastapi.responses import StreamingResponse
 from app.db.connection import db_cursor
 
 router = APIRouter(tags=["Consulta"])
 logger = logging.getLogger(__name__)
+
+
+def _clean_filter_values(values: Optional[List[str]], *, maximum: int = 100) -> list[str]:
+    cleaned = []
+    for value in values or []:
+        normalized = str(value).strip()
+        if normalized and normalized not in cleaned:
+            cleaned.append(normalized)
+    if len(cleaned) > maximum:
+        raise HTTPException(400, f"São permitidos no máximo {maximum} valores por filtro")
+    return cleaned
+
+
+def _stock_filter_sql(
+    wh_ids: list[str],
+    location_keys: list[str],
+    item_filters: list[str],
+) -> tuple[str, list[str]]:
+    clauses: list[str] = []
+    params: list[str] = []
+
+    if wh_ids:
+        clauses.append(f"stock.WHID IN ({','.join('?' for _ in wh_ids)})")
+        params.extend(wh_ids)
+    if location_keys:
+        location_pairs = []
+        for value in location_keys:
+            if "|" not in value:
+                raise HTTPException(400, f"Localização inválida: '{value}'")
+            wh_id, location_id = (part.strip() for part in value.split("|", 1))
+            if not wh_id or not location_id:
+                raise HTTPException(400, f"Localização inválida: '{value}'")
+            location_pairs.append("(stock.WHID = ? AND stock.LocationID = ?)")
+            params.extend([wh_id, location_id])
+        clauses.append("(" + " OR ".join(location_pairs) + ")")
+    if item_filters:
+        clauses.append(
+            "(" + " OR ".join("stock.ItemID LIKE ?" for _ in item_filters) + ")"
+        )
+        params.extend(value.replace("*", "%") for value in item_filters)
+
+    return (" AND " + " AND ".join(clauses)) if clauses else "", params
+
+
+@router.get("/consulting/stock/options")
+def stock_filter_options():
+    """Armazéns e localizações disponíveis para os filtros de stock."""
+    with db_cursor() as (cursor, _):
+        cursor.execute(
+            """
+            SELECT CONVERT(nvarchar(100), WHID), ISNULL(WHDesc, '')
+            FROM Warehouses WITH (NOLOCK)
+            ORDER BY WHDesc, WHID
+            """
+        )
+        warehouses = cursor.fetchall()
+        cursor.execute(
+            """
+            SELECT CONVERT(nvarchar(100), WHID),
+                   CONVERT(nvarchar(100), LocationID),
+                   ISNULL(LocationDesc, '')
+            FROM Locations WITH (NOLOCK)
+            WHERE NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(100), LocationID))), '') IS NOT NULL
+            ORDER BY WHID, LocationID
+            """
+        )
+        locations = cursor.fetchall()
+
+    return {
+        "warehouses": [
+            {"wh_id": row[0], "wh_desc": row[1] or ""} for row in warehouses
+        ],
+        "locations": [
+            {
+                "wh_id": row[0],
+                "location_id": row[1],
+                "location_desc": row[2] or "",
+            }
+            for row in locations
+        ],
+    }
+
+
+@router.get("/consulting/stock")
+def list_stock(
+    wh_ids: Optional[List[str]] = Query(default=None),
+    location_keys: Optional[List[str]] = Query(default=None),
+    item_filters: Optional[List[str]] = Query(default=None),
+    as_of_date: Optional[date] = Query(default=None),
+    limit: int = Query(default=5000, ge=1, le=5000),
+):
+    """
+    Lista o stock atual ou reconstrói o stock no fim de uma data.
+
+    Para uma data histórica, os movimentos posteriores são invertidos:
+    saídas da origem são somadas e entradas no destino são retiradas.
+    """
+    if as_of_date and as_of_date > date.today():
+        raise HTTPException(400, "A data de stock não pode ser futura")
+
+    selected_wh = _clean_filter_values(wh_ids)
+    selected_locations = _clean_filter_values(location_keys)
+    selected_items = _clean_filter_values(item_filters, maximum=50)
+    filter_sql, filter_params = _stock_filter_sql(
+        selected_wh, selected_locations, selected_items
+    )
+
+    current_stock_cte = """
+        CurrentStock AS (
+            SELECT
+                CONVERT(nvarchar(100), inv.WHID) AS WHID,
+                CONVERT(nvarchar(100), inv.ItemID) AS ItemID,
+                CONVERT(nvarchar(100), inv.LocationID) AS LocationID,
+                CONVERT(nvarchar(100), ISNULL(inv.Lot, '')) AS Lot,
+                CONVERT(nvarchar(100), ISNULL(inv.ColorID, '')) AS ColorID,
+                CONVERT(nvarchar(100), ISNULL(inv.SizeID, '')) AS SizeID,
+                CONVERT(nvarchar(100), ISNULL(inv.Country, '')) AS Country,
+                CONVERT(nvarchar(100), ISNULL(inv.VolNum, '')) AS VolNum,
+                SUM(ISNULL(inv.Qty, 0)) AS Qty
+            FROM Inventory inv WITH (NOLOCK)
+            GROUP BY inv.WHID, inv.ItemID, inv.LocationID, inv.Lot,
+                     inv.ColorID, inv.SizeID, inv.Country, inv.VolNum
+        )
+    """
+
+    params: list[object] = []
+    if as_of_date:
+        # A data representa o stock no final desse dia; revertem-se movimentos
+        # desde as 00:00 do dia seguinte.
+        movement_start = as_of_date + timedelta(days=1)
+        stock_ctes = current_stock_cte + """,
+        MovementSides AS (
+            SELECT
+                CONVERT(nvarchar(100), sm.WHIDOrig) AS WHID,
+                CONVERT(nvarchar(100), sm.ItemID) AS ItemID,
+                CONVERT(nvarchar(100), sm.LocOrig) AS LocationID,
+                CONVERT(nvarchar(100), ISNULL(sm.Lot, '')) AS Lot,
+                CONVERT(nvarchar(100), ISNULL(sm.ColorID, '')) AS ColorID,
+                CONVERT(nvarchar(100), ISNULL(sm.SizeID, '')) AS SizeID,
+                CONVERT(nvarchar(100), ISNULL(sm.Country, '')) AS Country,
+                CONVERT(nvarchar(100), ISNULL(sm.VolNum, '')) AS VolNum,
+                -ISNULL(sm.Qty, 0) AS MovementQty
+            FROM StockMov sm WITH (NOLOCK)
+            WHERE sm.MovDateTime >= ?
+              AND NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(100), sm.WHIDOrig))), '') IS NOT NULL
+              AND CONVERT(nvarchar(100), sm.WHIDOrig) <> '0'
+              AND (
+                    UPPER(LTRIM(RTRIM(ISNULL(sm.MovDir, '')))) IN ('O', 'S', 'OUT', 'SAIDA', 'T', 'TRANSFERENCIA')
+                    OR NULLIF(LTRIM(RTRIM(ISNULL(sm.MovDir, ''))), '') IS NULL
+                  )
+
+            UNION ALL
+
+            SELECT
+                CONVERT(nvarchar(100), sm.WHIDDest) AS WHID,
+                CONVERT(nvarchar(100), sm.ItemID) AS ItemID,
+                CONVERT(nvarchar(100), sm.LocDest) AS LocationID,
+                CONVERT(nvarchar(100), ISNULL(sm.Lot, '')) AS Lot,
+                CONVERT(nvarchar(100), ISNULL(sm.ColorID, '')) AS ColorID,
+                CONVERT(nvarchar(100), ISNULL(sm.SizeID, '')) AS SizeID,
+                CONVERT(nvarchar(100), ISNULL(sm.Country, '')) AS Country,
+                CONVERT(nvarchar(100), ISNULL(sm.VolNum, '')) AS VolNum,
+                ISNULL(sm.Qty, 0) AS MovementQty
+            FROM StockMov sm WITH (NOLOCK)
+            WHERE sm.MovDateTime >= ?
+              AND NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(100), sm.WHIDDest))), '') IS NOT NULL
+              AND CONVERT(nvarchar(100), sm.WHIDDest) <> '0'
+              AND (
+                    UPPER(LTRIM(RTRIM(ISNULL(sm.MovDir, '')))) IN ('I', 'E', 'IN', 'ENTRADA', 'T', 'TRANSFERENCIA')
+                    OR NULLIF(LTRIM(RTRIM(ISNULL(sm.MovDir, ''))), '') IS NULL
+                  )
+        ),
+        MovementEffects AS (
+            SELECT WHID, ItemID, LocationID, Lot, ColorID, SizeID, Country, VolNum,
+                   SUM(MovementQty) AS MovementQty
+            FROM MovementSides
+            GROUP BY WHID, ItemID, LocationID, Lot, ColorID, SizeID, Country, VolNum
+        ),
+        StockKeys AS (
+            SELECT WHID, ItemID, LocationID, Lot, ColorID, SizeID, Country, VolNum
+            FROM CurrentStock
+            UNION
+            SELECT WHID, ItemID, LocationID, Lot, ColorID, SizeID, Country, VolNum
+            FROM MovementEffects
+        ),
+        StockRows AS (
+            SELECT keys_.WHID, keys_.ItemID, keys_.LocationID, keys_.Lot,
+                   keys_.ColorID, keys_.SizeID, keys_.Country, keys_.VolNum,
+                   ISNULL(current_.Qty, 0) - ISNULL(mov.MovementQty, 0) AS Qty
+            FROM StockKeys keys_
+            LEFT JOIN CurrentStock current_
+              ON current_.WHID = keys_.WHID
+             AND current_.ItemID = keys_.ItemID
+             AND current_.LocationID = keys_.LocationID
+             AND current_.Lot = keys_.Lot
+             AND current_.ColorID = keys_.ColorID
+             AND current_.SizeID = keys_.SizeID
+             AND current_.Country = keys_.Country
+             AND current_.VolNum = keys_.VolNum
+            LEFT JOIN MovementEffects mov
+              ON mov.WHID = keys_.WHID
+             AND mov.ItemID = keys_.ItemID
+             AND mov.LocationID = keys_.LocationID
+             AND mov.Lot = keys_.Lot
+             AND mov.ColorID = keys_.ColorID
+             AND mov.SizeID = keys_.SizeID
+             AND mov.Country = keys_.Country
+             AND mov.VolNum = keys_.VolNum
+        )
+        """
+        params.extend([movement_start, movement_start])
+    else:
+        stock_ctes = current_stock_cte + ", StockRows AS (SELECT * FROM CurrentStock)"
+
+    sql = f"""
+        WITH {stock_ctes}
+        SELECT TOP (?)
+            stock.WHID,
+            stock.ItemID,
+            MAX(ISNULL(im.ItemDesc, '')) AS ItemDesc,
+            MAX(ISNULL(im.ClientRef, '')) AS ClientRef,
+            MAX(ISNULL(im.Modelo, '')) AS Modelo,
+            stock.LocationID,
+            stock.Lot,
+            stock.ColorID,
+            stock.SizeID,
+            stock.Country,
+            stock.VolNum,
+            MAX(ISNULL(cl.ColorSmallDescr, '')) AS ColorDescr,
+            MAX(ISNULL(sz.SizeSmallDescr, '')) AS SizeDescr,
+            MAX(stock.Qty) AS Qty
+        FROM StockRows stock
+        JOIN ItemMaster im WITH (NOLOCK) ON im.ItemID = stock.ItemID
+        LEFT JOIN Colors cl WITH (NOLOCK) ON cl.ColorID = stock.ColorID
+        LEFT JOIN Sizes sz WITH (NOLOCK) ON sz.SizeID = stock.SizeID
+        WHERE 1 = 1 {filter_sql}
+        GROUP BY stock.WHID, stock.ItemID, stock.LocationID, stock.Lot,
+                 stock.ColorID, stock.SizeID, stock.Country, stock.VolNum
+        HAVING MAX(stock.Qty) > 0.000001
+        ORDER BY stock.WHID, stock.LocationID, stock.ItemID,
+                 stock.Lot, stock.VolNum, stock.ColorID, stock.SizeID
+    """
+    params.extend([limit + 1, *filter_params])
+
+    with db_cursor() as (cursor, _):
+        cursor.execute(sql, tuple(params))
+        rows = cursor.fetchall()
+
+    truncated = len(rows) > limit
+    rows = rows[:limit]
+    return {
+        "as_of_date": as_of_date.isoformat() if as_of_date else None,
+        "rows": [
+            {
+                "wh_id": row[0],
+                "item_id": row[1],
+                "item_desc": row[2] or "",
+                "client_ref": row[3] or "",
+                "model": row[4] or "",
+                "location_id": row[5],
+                "lot": row[6] or "",
+                "color_id": row[7] or "",
+                "size_id": row[8] or "",
+                "country": row[9] or "",
+                "vol_num": row[10] or "",
+                "color_desc": row[11] or "",
+                "size_desc": row[12] or "",
+                "qty": float(row[13] or 0),
+            }
+            for row in rows
+        ],
+        "truncated": truncated,
+        "limit": limit,
+    }
 
 
 def _packing_status(total: int, confirmed: int) -> str:

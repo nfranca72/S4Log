@@ -240,6 +240,13 @@ concorrentes. Depois do processamento:
 - erro: `SyncEnded=1`, `SyncSucceeded=0`, `SyncError=1`;
 - a resposta externa ou o diagnostico ficam em `SyncResponse`.
 
+Para `PACKING_LIST`, o worker tambem aplica idempotencia por `Field01`
+(`OrdersPicking.ID`). Se existir um evento anterior concluido com sucesso, o
+novo evento e terminado sem chamada HTTP e o `SyncResponse` indica
+`skipped_duplicate=true`. Se outro evento para o mesmo picking ainda estiver em
+processamento, o mais recente volta ao estado pendente para poder ser tentado
+apenas caso o primeiro falhe.
+
 O script [sql/by_ptl_sync_queue.sql](sql/by_ptl_sync_queue.sql) acrescenta os
 defaults necessarios a tabela existente e inclui exemplos corretos para os
 quatro eventos.

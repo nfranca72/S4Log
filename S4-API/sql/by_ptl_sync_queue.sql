@@ -73,10 +73,19 @@ VALUES
      CONVERT(nvarchar(100), @OrdersPickingID), @NewPTL);
 
 /* PACKING_LIST */
-INSERT dbo.SyncQueue
-    (Area, RequestDate, SyncStarted, SyncEnded, Field01)
-VALUES
-    (N'PACKING_LIST', GETDATE(), 0, 0, CONVERT(nvarchar(100), @OrdersPickingID));
+IF NOT EXISTS (
+    SELECT 1
+    FROM dbo.SyncQueue WITH (UPDLOCK, HOLDLOCK)
+    WHERE Area = N'PACKING_LIST'
+      AND LTRIM(RTRIM(CONVERT(nvarchar(100), Field01))) =
+          LTRIM(RTRIM(CONVERT(nvarchar(100), @OrdersPickingID)))
+)
+BEGIN
+    INSERT dbo.SyncQueue
+        (Area, RequestDate, SyncStarted, SyncEnded, Field01)
+    VALUES
+        (N'PACKING_LIST', GETDATE(), 0, 0, CONVERT(nvarchar(100), @OrdersPickingID));
+END;
 
 /* PACKED_BOX */
 INSERT dbo.SyncQueue

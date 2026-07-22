@@ -261,12 +261,15 @@ export default function SimplifiedMovements() {
   // ── Document ──────────────────────────────────────────────────────────────────
   const [documents, setDocuments]       = useState([])
   const [document,  setDocument]        = useState(null)
+  const [documentSearch, setDocumentSearch] = useState('')
   const [loadingDocs, setLoadingDocs]   = useState(false)
+  const documentDebounce = useRef(null)
 
   // ── Items (cart) ──────────────────────────────────────────────────────────────
   const [docLines, setDocLines]         = useState([])     // lines from origin doc
   const [freeItems, setFreeItems]       = useState([])     // search results (no doc)
   const [itemSearch, setItemSearch]     = useState('')
+  const [useLinkedFreeItemSearch, setUseLinkedFreeItemSearch] = useState(false)
   const [loadingLines, setLoadingLines] = useState(false)
   const itemDebounce = useRef(null)
 
@@ -290,6 +293,14 @@ export default function SimplifiedMovements() {
   const [volumeQty, setVolumeQty]       = useState('')
   // Simple qty
   const [simpleQty, setSimpleQty]       = useState('')
+
+  // Optional RFID quantity capture
+  const [rfidEnabled, setRfidEnabled] = useState(false)
+  const [rfidTunnels, setRfidTunnels] = useState([])
+  const [rfidTunnelId, setRfidTunnelId] = useState('')
+  const [rfidReading, setRfidReading] = useState(false)
+  const [rfidBusy, setRfidBusy] = useState(false)
+  const [rfidCounts, setRfidCounts] = useState({ valid: 0, invalid: 0, total: 0 })
 
   // ── Warehouse ─────────────────────────────────────────────────────────────────
   const [warehouses, setWarehouses]     = useState([])
@@ -315,6 +326,8 @@ export default function SimplifiedMovements() {
   const selectedBoxData = boxes.find(box => String(box.vol_num) === String(selectedBox)) || null
   const effectiveOriginLocation = selectedBoxData?.location_id || locOrig
   const hasOriginScope = !!(whOrig && (effectiveOriginLocation || selectedBox))
+  const allowLinkedFreeItem = !!(document && movType?.link_itemid_as_component)
+  const showFreeItemSearch = !document || useLinkedFreeItemSearch
   const currentBoxItems = selectedBox ? boxItems : []
   const boxItemIds = new Set(currentBoxItems.map(item => item.item_id))
   const normalizedItemSearch = itemSearch.trim().toLowerCase()
@@ -326,6 +339,69 @@ export default function SimplifiedMovements() {
         return haystack.includes(normalizedItemSearch)
       })
     : freeItems.filter(item => !selectedBoxItemId || item.item_id === selectedBoxItemId)
+
+  const applyRfidSnapshot = useCallback((snapshot) => {
+    const itemId = String(activeItem?.item_id || '').trim().toLowerCase()
+    const valid = (snapshot?.known_items || []).reduce(
+      (sum, item) => String(item.item_id || '').trim().toLowerCase() === itemId
+        ? sum + Number(item.qty_counted || 0)
+        : sum,
+      0,
+    )
+    const total = Number(snapshot?.total_tags || 0)
+    setRfidCounts({ valid, invalid: Math.max(0, total - valid), total })
+
+    // RFID supplies the quantity only where this screen has one quantity field.
+    if (activeItem?.has_volumes) setVolumeQty(String(valid || ''))
+    else if (!activeItem?.has_dims && !activeItem?.has_lots) setSimpleQty(String(valid || ''))
+  }, [activeItem])
+
+  useEffect(() => {
+    if (!rfidEnabled || rfidTunnels.length) return
+    apiFetch('/config/tunnels')
+      .then(rows => {
+        const list = Array.isArray(rows) ? rows : []
+        setRfidTunnels(list)
+        if (list[0]?.tunnel_id) setRfidTunnelId(String(list[0].tunnel_id))
+      })
+      .catch(error => toast(`Erro ao carregar túneis RFID: ${error.message}`, 'error'))
+  }, [rfidEnabled, rfidTunnels.length, toast])
+
+  useEffect(() => {
+    setRfidCounts({ valid: 0, invalid: 0, total: 0 })
+  }, [activeItem?.item_id, selectedBox])
+
+  useEffect(() => {
+    if (!rfidEnabled || !rfidReading || !rfidTunnelId || !activeItem) return undefined
+    let cancelled = false
+    const refresh = () => apiFetch(`/counting/tunnels/${rfidTunnelId}/snapshot`)
+      .then(snapshot => { if (!cancelled) applyRfidSnapshot(snapshot) })
+      .catch(() => {})
+    refresh()
+    const timer = window.setInterval(refresh, 1000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [rfidEnabled, rfidReading, rfidTunnelId, activeItem, applyRfidSnapshot])
+
+  const runRfidAction = useCallback(async (action) => {
+    if (!rfidTunnelId) { toast('Seleciona um túnel RFID', 'error'); return }
+    setRfidBusy(true)
+    try {
+      await apiFetch(`/counting/tunnels/${rfidTunnelId}/${action}`, { method: 'POST' })
+      setRfidReading(action !== 'stop')
+      if (action === 'reset') {
+        setRfidCounts({ valid: 0, invalid: 0, total: 0 })
+        if (activeItem?.has_volumes) setVolumeQty('')
+        else if (!activeItem?.has_dims && !activeItem?.has_lots) setSimpleQty('')
+      }
+    } catch (error) {
+      toast(error.message || 'Erro na operação RFID', 'error')
+    } finally {
+      setRfidBusy(false)
+    }
+  }, [rfidTunnelId, activeItem, toast])
 
   // ── Step index for Steps component ───────────────────────────────────────────
   const stepIndex = STEP_IDS.indexOf(step) + 1
@@ -361,16 +437,19 @@ export default function SimplifiedMovements() {
     }, 300)
   }, [partnerSearch])
 
-  // ── Load documents when entering document step ────────────────────────────────
+  // ── Load documents when entering document step / searching ───────────────────
   useEffect(() => {
     if (step !== 'document' || !movType) return
-    setLoadingDocs(true)
-    const partnerId = partner?.partner_id || ''
-    apiFetch(`/simplified-movements/documents?doc_type=${movType.doc_type}&partner_id=${encodeURIComponent(partnerId)}`)
-      .then(setDocuments)
-      .catch(() => toast('Erro ao carregar documentos', 'error'))
-      .finally(() => setLoadingDocs(false))
-  }, [step, movType, partner])
+    clearTimeout(documentDebounce.current)
+    documentDebounce.current = setTimeout(() => {
+      setLoadingDocs(true)
+      const partnerId = partner?.partner_id || ''
+      apiFetch(`/simplified-movements/documents?doc_type=${movType.doc_type}&partner_id=${encodeURIComponent(partnerId)}&search=${encodeURIComponent(documentSearch)}`)
+        .then(setDocuments)
+        .catch(() => toast('Erro ao carregar documentos', 'error'))
+        .finally(() => setLoadingDocs(false))
+    }, 300)
+  }, [step, movType, partner, documentSearch, toast])
 
   // ── Load document lines when entering items step ──────────────────────────────
   useEffect(() => {
@@ -394,7 +473,7 @@ export default function SimplifiedMovements() {
 
   // ── Debounced free-item search ────────────────────────────────────────────────
   useEffect(() => {
-    if (step !== 'items' || document) return
+    if (step !== 'items' || (document && !useLinkedFreeItemSearch)) return
     clearTimeout(itemDebounce.current)
     if (!whOrig) { setFreeItems([]); return }
     if (selectedBox) {
@@ -408,7 +487,7 @@ export default function SimplifiedMovements() {
         .then(rows => setFreeItems(selectedBox ? rows.filter(item => boxItemIds.has(item.item_id)) : rows))
         .catch(() => {})
     }, 300)
-  }, [itemSearch, step, document, whOrig, locOrig, selectedBox, currentBoxItems])
+  }, [itemSearch, step, document, useLinkedFreeItemSearch, whOrig, locOrig, selectedBox, currentBoxItems])
 
   // ── Load warehouses when entering warehouse step ──────────────────────────────
   useEffect(() => {
@@ -488,6 +567,8 @@ export default function SimplifiedMovements() {
     setMovType(mt)
     setPartner(null)
     setDocument(null)
+    setDocumentSearch('')
+    setUseLinkedFreeItemSearch(false)
     setCart([])
     setActiveItem(null)
 
@@ -504,6 +585,8 @@ export default function SimplifiedMovements() {
   const handleSelectPartner = useCallback((p) => {
     setPartner(p)
     setDocument(null)
+    setDocumentSearch('')
+    setUseLinkedFreeItemSearch(false)
     setCart([])
 
     if (movType?.has_origin_doc_types) {
@@ -516,12 +599,14 @@ export default function SimplifiedMovements() {
   // ── Select document ────────────────────────────────────────────────────────────
   const handleSelectDocument = useCallback((doc) => {
     setDocument(doc)
+    setUseLinkedFreeItemSearch(false)
     setCart([])
     setStep('items')
   }, [])
 
   const handleSkipDocument = useCallback(() => {
     setDocument(null)
+    setUseLinkedFreeItemSearch(false)
     setCart([])
     setStep('items')
   }, [])
@@ -675,7 +760,7 @@ export default function SimplifiedMovements() {
   // ── Add item to cart ───────────────────────────────────────────────────────────
   const addToCart = useCallback(() => {
     if (!activeItem) return
-    const docRow = activeItem.order_row ?? null
+    const docRow = activeItem.order_row ?? (allowLinkedFreeItem ? 0 : null)
     const currentOriginLocation = effectiveOriginLocation || ''
     const existingItem = cart.find(item => item.item_id === activeItem.item_id)
     const existingLines = existingItem?.lines || []
@@ -769,7 +854,7 @@ export default function SimplifiedMovements() {
       setSelectedBoxItemId('')
     }
     toast('Artigo adicionado', 'success')
-  }, [activeItem, cart, currentBoxItems.length, dimValues, selectedLot, lotQty, selectedVols, volumeQty, simpleQty, itemDimGrid, itemLots, itemVolumes, selectedBox, effectiveOriginLocation, toast])
+  }, [activeItem, allowLinkedFreeItem, cart, currentBoxItems.length, dimValues, selectedLot, lotQty, selectedVols, volumeQty, simpleQty, itemDimGrid, itemLots, itemVolumes, selectedBox, effectiveOriginLocation, toast])
 
   // ── Remove cart item ───────────────────────────────────────────────────────────
   const removeFromCart = useCallback((itemId) => {
@@ -1001,6 +1086,16 @@ export default function SimplifiedMovements() {
             </div>
           )}
 
+          <div className={styles.searchBar}>
+            <input
+              className={styles.searchInput}
+              value={documentSearch}
+              onChange={e => setDocumentSearch(e.target.value)}
+              placeholder="Filtrar por documento, tipo, cliente ou observação"
+              autoFocus
+            />
+          </div>
+
           {loadingDocs ? (
             <div style={{ textAlign: 'center', padding: 24 }}><Spinner /></div>
           ) : (
@@ -1190,6 +1285,45 @@ export default function SimplifiedMovements() {
                 Quantidade total possível de movimentar: {activeItem.qty_stock ?? 0} {activeItem.stk_unit || 'UN'}
               </div>
 
+              <div className={styles.rfidPanel}>
+                <label className={styles.rfidToggle}>
+                  <input
+                    type="checkbox"
+                    checked={rfidEnabled}
+                    onChange={e => {
+                      setRfidEnabled(e.target.checked)
+                      if (!e.target.checked) setRfidReading(false)
+                    }}
+                  />
+                  Indicar quantidade por leitura RFID (opcional)
+                </label>
+                {rfidEnabled && (
+                  <>
+                    <div className={styles.rfidControls}>
+                      <select value={rfidTunnelId} onChange={e => setRfidTunnelId(e.target.value)}>
+                        <option value="">Selecionar túnel RFID...</option>
+                        {rfidTunnels.map(tunnel => (
+                          <option key={tunnel.tunnel_id} value={tunnel.tunnel_id}>
+                            {tunnel.tunnel_code || `Túnel ${tunnel.tunnel_id}`}
+                            {tunnel.tunnel_desc ? ` — ${tunnel.tunnel_desc}` : ''}
+                          </option>
+                        ))}
+                      </select>
+                      <Btn variant="primary" loading={rfidBusy} onClick={() => runRfidAction('start')}>Iniciar</Btn>
+                      <Btn variant="outline" loading={rfidBusy} onClick={() => runRfidAction('reset')}>Nova leitura</Btn>
+                      <Btn variant="outline" loading={rfidBusy} onClick={() => runRfidAction('stop')}>Parar</Btn>
+                    </div>
+                    <div className={styles.rfidCounters}>
+                      <div className={styles.rfidValid}><strong>{rfidCounts.valid}</strong><span>TAGs do artigo</span></div>
+                      <div className={styles.rfidInvalid}><strong>{rfidCounts.invalid}</strong><span>TAGs não pertencem ao artigo</span></div>
+                    </div>
+                    {(activeItem.has_dims || activeItem.has_lots) && (
+                      <div className={styles.rfidHint}>A validação RFID é apresentada, mas a quantidade deve ser distribuída manualmente pela dimensão ou lote.</div>
+                    )}
+                  </>
+                )}
+              </div>
+
               {loadingItemDetail ? (
                 <div style={{ textAlign: 'center', padding: 20 }}><Spinner /></div>
               ) : activeItem.has_dims ? (
@@ -1254,9 +1388,20 @@ export default function SimplifiedMovements() {
           )}
 
           {/* Item list — from document */}
-          {!activeItem && document && (
+          {!activeItem && document && !useLinkedFreeItemSearch && (
             <Card>
               <CardTitle>Artigos do documento</CardTitle>
+              {allowLinkedFreeItem && (
+                <div className={styles.actions} style={{ marginTop: 0, marginBottom: 16 }}>
+                  <Btn variant="outline" onClick={() => {
+                    setUseLinkedFreeItemSearch(true)
+                    setItemSearch('')
+                    setFreeItems([])
+                  }}>
+                    Selecionar outro artigo
+                  </Btn>
+                </div>
+              )}
               {(!whOrig) && (
                 <div className={styles.empty}>
                   <div className={styles.emptyText}>Seleciona primeiro o armazém para carregar o stock.</div>
@@ -1308,10 +1453,21 @@ export default function SimplifiedMovements() {
             </Card>
           )}
 
-          {/* Item list — free search (no document) */}
-          {!activeItem && !document && (
+          {/* Item list — free search */}
+          {!activeItem && showFreeItemSearch && (
             <Card>
-              <CardTitle>Pesquisar artigo</CardTitle>
+              <CardTitle>{allowLinkedFreeItem ? 'Pesquisar outro artigo' : 'Pesquisar artigo'}</CardTitle>
+              {allowLinkedFreeItem && (
+                <div className={styles.actions} style={{ marginTop: 0, marginBottom: 16 }}>
+                  <Btn variant="outline" onClick={() => {
+                    setUseLinkedFreeItemSearch(false)
+                    setItemSearch('')
+                    setFreeItems([])
+                  }}>
+                    Voltar aos artigos do documento
+                  </Btn>
+                </div>
+              )}
               {(!whOrig) && (
                 <div className={styles.empty}>
                   <div className={styles.emptyText}>Seleciona primeiro o armazém para pesquisar stock.</div>
