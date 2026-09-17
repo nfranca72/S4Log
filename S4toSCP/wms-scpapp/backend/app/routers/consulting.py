@@ -367,6 +367,32 @@ def list_packings(
     return result
 
 
+@router.get("/consulting/packings/search")
+def search_packings_content(
+    doc_type: str = Query(default="PSCP"),
+    q: str = Query(..., min_length=1),
+):
+    """Procura um nº de caixa (ou código de barras) ou uma referência/código de artigo
+    dentro das caixas dos packings de um doc_type. Devolve os OrderIDs onde foi encontrado."""
+    like = f"%{q.strip()}%"
+    with db_cursor() as (cursor, _):
+        cursor.execute("""
+            SELECT DISTINCT vm.ParentOrderID
+            FROM VolMaster vm
+            LEFT JOIN VolItem vi ON vi.VolNum = vm.VolNum
+            LEFT JOIN ItemMaster im ON im.ItemID = vi.ItemID
+            WHERE vm.ParentDocType = ? AND vm.VolDocCod = 'CX'
+              AND (
+                    CAST(vm.VolNum AS VARCHAR(20)) = ?
+                 OR vm.VolNum2N LIKE ?
+                 OR vi.ItemID LIKE ?
+                 OR im.ClientRef LIKE ?
+              )
+        """, (doc_type, q.strip(), like, like, like))
+        rows = cursor.fetchall()
+    return [r[0] for r in rows]
+
+
 @router.get("/consulting/packings/{order_id}/lines")
 def packing_lines(order_id: int, doc_type: str = "PSCP"):
     with db_cursor() as (cursor, _):

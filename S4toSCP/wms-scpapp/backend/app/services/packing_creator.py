@@ -4,6 +4,21 @@ from app.db.connection import db_cursor
 from app.models.schemas import CSVRow, CSVHeader, PackingCreated
 
 
+def check_requester_id_duplicate(doc_num: str) -> list[int]:
+    """Devolve os OrderID de packings PSCP já existentes com o mesmo RequesterID
+    (nº de documento do CSV), para avisar o operador de uma possível reimportação."""
+    doc_num = (doc_num or "").strip()
+    if not doc_num:
+        return []
+    with db_cursor() as (cursor, _):
+        cursor.execute("""
+            SELECT OrderID FROM ClientOrders
+            WHERE DocType = 'PSCP' AND RequesterID = ?
+            ORDER BY OrderID DESC
+        """, (doc_num,))
+        return [r[0] for r in cursor.fetchall()]
+
+
 def _next_order_id(cursor) -> int:
     year = datetime.now().year
     base = year * 1000000

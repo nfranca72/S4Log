@@ -71,6 +71,12 @@ function applyToBoxes(pallets, looseBoxes, boxId, updater) {
   return { nextPallets, nextLooseBoxes }
 }
 
+function formatQty(value) {
+  const numeric = Number(value || 0)
+  if (!Number.isFinite(numeric)) return '0'
+  return Number.isInteger(numeric) ? String(numeric) : numeric.toLocaleString('pt-PT')
+}
+
 export default function Abastecimento() {
   const toast = useToast()
 
@@ -662,6 +668,7 @@ export default function Abastecimento() {
                 <th>Artigo</th>
                 <th>Fornecedor</th>
                 <th>Data</th>
+                <th>Qtd. total</th>
                 <th>Linhas</th>
                 <th>Obs.</th>
               </tr>
@@ -669,7 +676,7 @@ export default function Abastecimento() {
             <tbody>
               {selectedOrderIds.length === 0 && (
                 <tr>
-                  <td colSpan="7" className={styles.emptyCell}>Sem ordens selecionadas.</td>
+                  <td colSpan="8" className={styles.emptyCell}>Sem ordens selecionadas.</td>
                 </tr>
               )}
               {documents.filter(document => selectedOrderIds.includes(document.order_id)).map(document => (
@@ -679,6 +686,7 @@ export default function Abastecimento() {
                   <td>{document.item_id || '-'}</td>
                   <td>{document.partner_name || document.partner_id}</td>
                   <td>{document.order_date || '-'}</td>
+                  <td><strong>{formatQty(document.total_qty)}</strong></td>
                   <td>{document.total_lines}</td>
                   <td>{document.obs || '-'}</td>
                 </tr>
@@ -913,6 +921,7 @@ export default function Abastecimento() {
                     <th>Fornecedor</th>
                     <th>Data</th>
                     <th>Prevista</th>
+                    <th>Qtd. total</th>
                     <th>Linhas</th>
                     <th>Obs.</th>
                   </tr>
@@ -920,7 +929,7 @@ export default function Abastecimento() {
                 <tbody>
                   {filteredDocuments.length === 0 && (
                     <tr>
-                      <td colSpan="9" className={styles.emptyCell}>Sem documentos para os filtros aplicados.</td>
+                      <td colSpan="10" className={styles.emptyCell}>Sem documentos para os filtros aplicados.</td>
                     </tr>
                   )}
                   {filteredDocuments.map(document => (
@@ -938,6 +947,7 @@ export default function Abastecimento() {
                       <td>{document.partner_name || document.partner_id}</td>
                       <td>{document.order_date || '-'}</td>
                       <td>{document.due_date || '-'}</td>
+                      <td><strong>{formatQty(document.total_qty)}</strong></td>
                       <td>{document.total_lines}</td>
                       <td>{document.obs || '-'}</td>
                     </tr>

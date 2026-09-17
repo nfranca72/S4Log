@@ -1,0 +1,382 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.topBar {
+  display: grid;
+  grid-template-columns: 38px auto 38px minmax(74px, 1fr);
+  gap: 4px;
+  align-items: center;
+  align-self: start;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.iconButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(15, 23, 42, 0.58);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.iconButton:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.docTypeSelect {
+  min-width: 0;
+}
+
+.docTypeSelect select {
+  width: 100%;
+  min-height: 38px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(15, 23, 42, 0.58);
+  color: inherit;
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.summaryBar {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow: hidden;
+  background: var(--border);
+}
+
+.summaryItem {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 7px 6px;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.summaryItem strong {
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: clamp(13px, 2.6vw, 16px);
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.summaryItem span {
+  min-width: 0;
+  font-size: clamp(6px, 1.35vw, 8px);
+  color: var(--text3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.listCard {
+  display: grid;
+  flex: 1;
+  padding: 0;
+  margin-bottom: 0;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.tableWrap {
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  border-radius: 16px;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 11px;
+}
+
+.dotCol {
+  width: 22px;
+  text-align: center !important;
+}
+
+.table th,
+.table td {
+  padding: 7px 5px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+  text-align: left;
+  vertical-align: middle;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.table thead th {
+  position: sticky;
+  top: 0;
+  position: sticky;
+  background: rgba(15, 23, 42, 0.96);
+  z-index: 2;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text3);
+  position: sticky;
+  position: relative;
+  padding-right: 14px;
+}
+
+.headerLabel {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.resizeHandle {
+  position: absolute;
+  top: 0;
+  right: -4px;
+  width: 10px;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.resizeHandle::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 2px;
+  height: 16px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.42);
+}
+
+.resizeHandle:hover::before {
+  background: rgba(96, 165, 250, 0.72);
+}
+
+.table tbody tr {
+  cursor: pointer;
+}
+
+.table tbody tr:hover,
+.activeRow {
+  background: rgba(56, 189, 248, 0.08);
+}
+
+.state {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  max-width: 100%;
+  border-radius: 999px;
+  padding: 2px 6px;
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.state_ok {
+  background: rgba(34, 197, 94, 0.16);
+  color: #86efac;
+}
+
+.state_warn {
+  background: rgba(245, 158, 11, 0.16);
+  color: #fcd34d;
+}
+
+.state_danger {
+  background: rgba(248, 113, 113, 0.16);
+  color: #fca5a5;
+}
+
+.state_muted {
+  background: rgba(148, 163, 184, 0.16);
+  color: #cbd5e1;
+}
+
+.urgencyDot {
+  display: inline-flex;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+
+.urgencyDot_high {
+  background: #ef4444;
+}
+
+.urgencyDot_medium {
+  background: #f59e0b;
+}
+
+.urgencyDot_low {
+  background: #22c55e;
+}
+
+.urgencyDot_accent {
+  background: #38bdf8;
+}
+
+.urgencyDot_muted {
+  background: #64748b;
+}
+
+.detailPanel {
+  display: grid;
+  gap: 4px;
+  padding: 6px;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(15, 23, 42, 0.42);
+  margin-top: auto;
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
+}
+
+.empty {
+  padding: 18px 0;
+  color: var(--muted, #94a3b8);
+  text-align: center;
+}
+
+.inlineActions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.actionTile {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  min-height: 60px;
+  padding: 9px 12px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 56%, var(--border));
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0)),
+    var(--surface2);
+  color: var(--text);
+  box-shadow: 0 12px 28px rgba(2, 6, 23, 0.32);
+  cursor: pointer;
+  min-width: 0;
+}
+
+.actionTileAlt {
+  border-color: rgba(52, 211, 153, 0.34);
+}
+
+.actionTileDisabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
+.actionIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  background: rgba(79, 142, 247, 0.12);
+  color: var(--accent);
+}
+
+.actionTileAlt .actionIcon {
+  background: rgba(52, 211, 153, 0.12);
+  color: var(--green);
+}
+
+.actionCopy {
+  display: grid;
+  min-width: 0;
+}
+
+.actionCopy strong,
+.actionCopy small {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.actionCopy strong {
+  font-size: clamp(15px, 2.6vw, 19px);
+  font-weight: 800;
+  letter-spacing: .01em;
+}
+
+.actionCopy small {
+  color: var(--text3);
+  font-size: clamp(10px, 1.5vw, 12px);
+}
+
+@media (max-width: 900px) {
+  .topBar {
+    grid-template-columns: 34px auto 34px minmax(68px, 1fr);
+  }
+
+  .page {
+    gap: 4px;
+  }
+
+  .iconButton,
+  .docTypeSelect select {
+    min-height: 34px;
+    height: 34px;
+  }
+
+  .actionTile {
+    grid-template-columns: 38px minmax(0, 1fr);
+    min-height: 52px;
+    padding: 7px 9px;
+    gap: 8px;
+  }
+
+  .actionIcon {
+    width: 38px;
+    height: 38px;
+  }
+
+  .actionCopy small {
+    display: none;
+  }
+
+  .table {
+    min-width: 700px;
+  }
+}

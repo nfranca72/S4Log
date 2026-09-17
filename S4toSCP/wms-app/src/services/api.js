@@ -30,7 +30,26 @@ async function request(path, options = {}) {
     } catch {
       err = { detail: text || `Erro HTTP ${res.status}` }
     }
-    throw new Error(err.detail || 'Erro no servidor')
+    const detail = err?.detail
+    if (Array.isArray(detail)) {
+      const msg = detail
+        .map(item => {
+          const pathLabel = Array.isArray(item?.loc) ? item.loc.join('.') : ''
+          const textLabel = String(item?.msg || item || '').trim()
+          return pathLabel ? `${pathLabel}: ${textLabel}` : textLabel
+        })
+        .filter(Boolean)
+        .join(' | ')
+      throw new Error(msg || `Erro HTTP ${res.status}`)
+    }
+    if (detail && typeof detail === 'object') {
+      throw new Error(
+        detail.message
+        || detail.error
+        || JSON.stringify(detail)
+      )
+    }
+    throw new Error(detail || 'Erro no servidor')
   }
   return res.json()
 }
@@ -77,6 +96,22 @@ export const packingApi = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ qty_read: qtyRead }),
+    }),
+}
+
+/* ── Import Artigos Benfica ── */
+export const benficaItemsApi = {
+  preview: (file) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    return request('/benfica-items/preview', { method: 'POST', body: fd })
+  },
+
+  import: (rows) =>
+    request('/benfica-items/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(rows),
     }),
 }
 
@@ -158,6 +193,94 @@ export const supplyApi = {
     }),
   volumePrintConfigs: (docType = 'CX') =>
     request(`/abastecimento/volume-print-configs?doc_type=${encodeURIComponent(docType)}`),
+}
+
+/* ── Documento de Separacao ── */
+export const separationApi = {
+  config: () => request('/separation-documents/config'),
+  warehouses: () => request('/separation-documents/warehouses'),
+  documentTypes: () => request('/separation-documents/document-types'),
+  executionDocumentTypes: () => request('/separation-documents/execution/document-types'),
+  executionOrders: (docTypes = []) => {
+    const query = new URLSearchParams()
+    docTypes.forEach(docType => {
+      if (docType) query.append('doc_type', docType)
+    })
+    return request(`/separation-documents/execution/orders${query.toString() ? `?${query.toString()}` : ''}`)
+  },
+  executionParameters: () => request('/separation-documents/execution/parameters'),
+  executionDetail: (orderPickingId) =>
+    request(`/separation-documents/execution/${encodeURIComponent(orderPickingId)}/detail`),
+  executionCreateVolume: (orderPickingId, volTypeId) =>
+    request(`/separation-documents/execution/${encodeURIComponent(orderPickingId)}/volumes`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ vol_type_id: volTypeId }),
+    }),
+  executionCheckBox: (orderPickingId, rowNumber, volNum) =>
+    request(`/separation-documents/execution/${encodeURIComponent(orderPickingId)}/lines/${encodeURIComponent(rowNumber)}/check-box`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ vol_num: volNum }),
+    }),
+  executionPickLine: (orderPickingId, rowNumber, payload) =>
+    request(`/separation-documents/execution/${encodeURIComponent(orderPickingId)}/lines/${encodeURIComponent(rowNumber)}/pick`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+  executionUnpickLine: (orderPickingId, rowNumber) =>
+    request(`/separation-documents/execution/${encodeURIComponent(orderPickingId)}/lines/${encodeURIComponent(rowNumber)}/unpick`, {
+      method: 'POST',
+    }),
+  partners: (docType, search = '') =>
+    request(`/separation-documents/partners?doc_type=${encodeURIComponent(docType)}&search=${encodeURIComponent(search)}`),
+  documents: (docType, partnerId = '', search = '') =>
+    request(
+      `/separation-documents/documents?doc_type=${encodeURIComponent(docType)}&partner_id=${encodeURIComponent(partnerId)}&search=${encodeURIComponent(search)}`
+    ),
+  lines: (payload) =>
+    request('/separation-documents/lines', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+  searchItems: (whId, search) =>
+    request(`/separation-documents/items?wh_id=${encodeURIComponent(whId)}&search=${encodeURIComponent(search)}`),
+  itemBoxes: (itemId, whIds, sizeId = '') => {
+    const ids = Array.isArray(whIds) ? whIds : [whIds]
+    const query = new URLSearchParams()
+    ids.filter(id => id !== '' && id != null).forEach(id => query.append('wh_id', id))
+    query.append('size_id', sizeId)
+    return request(`/separation-documents/items/${encodeURIComponent(itemId)}/boxes?${query.toString()}`)
+  },
+  create: (payload) =>
+    request('/separation-documents/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+  consultation: (params = {}) => {
+    const query = new URLSearchParams()
+    if (params.fromDate) query.set('from_date', params.fromDate)
+    if (params.toDate) query.set('to_date', params.toDate)
+    if (params.onlyOpen) query.set('only_open', 'true')
+    return request(`/separation-documents/orders-picking${query.toString() ? `?${query.toString()}` : ''}`)
+  },
+  consultationMetadata: () => request('/separation-documents/orders-picking/metadata'),
+  consultationDetail: (orderPickingId) => request(`/separation-documents/orders-picking/${encodeURIComponent(orderPickingId)}`),
+  consultationUpdate: (orderPickingId, payload) =>
+    request(`/separation-documents/orders-picking/${encodeURIComponent(orderPickingId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+  consultationDelete: (orderPickingId, payload) =>
+    request(`/separation-documents/orders-picking/${encodeURIComponent(orderPickingId)}/delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload || {}),
+    }),
 }
 
 /* ── Contagem RFID ── */

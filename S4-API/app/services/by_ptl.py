@@ -9,10 +9,24 @@ from fastapi.encoders import jsonable_encoder
 from app.models.by_ptl import ByPtlWaveRequest, ByPtlWaveResponse
 from app.models.by_ptl import ByPtlAction, ByPtlDispatchRequest, ByPtlDispatchResponse
 from app.models.by_ptl import ByPtlQueuedResponse
+from app.models.by_ptl import (
+    SeparationOrderCancelRequest,
+    SeparationOrderCancelResponse,
+    SeparationOrderDetailResponse,
+    SeparationOrderListResponse,
+    SeparationOrderMaintenanceRequest,
+    SeparationOrderMaintenanceResponse,
+    SeparationOrderMetadataResponse,
+)
 from app.repositories.by_ptl import (
+    cancel_separation_order,
     create_or_update_articles,
     create_or_update_customers_and_orders,
     enqueue_ptl_change,
+    fetch_separation_order_detail,
+    fetch_separation_order_metadata,
+    fetch_separation_orders,
+    update_separation_order_maintenance,
 )
 from app.settings import settings
 
@@ -158,6 +172,61 @@ def queue_or_dispatch_to_wms(
         )
 
     return dispatch_to_wms(payload)
+
+
+def get_separation_orders(
+    from_date: Optional[str],
+    to_date: Optional[str],
+    only_open: bool,
+    only_executed: bool,
+    include_cancelled: bool,
+) -> SeparationOrderListResponse:
+    return SeparationOrderListResponse(
+        **fetch_separation_orders(
+            from_date=from_date,
+            to_date=to_date,
+            only_open=only_open,
+            only_executed=only_executed,
+            include_cancelled=include_cancelled,
+        )
+    )
+
+
+def get_separation_order_detail(order_picking_id: int) -> SeparationOrderDetailResponse:
+    result = fetch_separation_order_detail(order_picking_id)
+    if result is None:
+        raise ValueError(f"OrdersPicking ID {order_picking_id} was not found")
+    return SeparationOrderDetailResponse(**result)
+
+
+def patch_separation_order_maintenance(
+    order_picking_id: int,
+    payload: SeparationOrderMaintenanceRequest,
+) -> SeparationOrderMaintenanceResponse:
+    return SeparationOrderMaintenanceResponse(
+        **update_separation_order_maintenance(
+            order_picking_id=order_picking_id,
+            assigned_user=payload.assigned_user,
+            urgency_status_id=payload.urgency_status_id,
+        )
+    )
+
+
+def post_cancel_separation_order(
+    order_picking_id: int,
+    payload: SeparationOrderCancelRequest,
+) -> SeparationOrderCancelResponse:
+    return SeparationOrderCancelResponse(
+        **cancel_separation_order(
+            order_picking_id=order_picking_id,
+            cancelled_by=payload.cancelled_by,
+            reason=payload.reason,
+        )
+    )
+
+
+def get_separation_order_metadata() -> SeparationOrderMetadataResponse:
+    return SeparationOrderMetadataResponse(**fetch_separation_order_metadata())
 
 
 def _authenticate_wms_session(session: requests.Session) -> dict[str, str]:

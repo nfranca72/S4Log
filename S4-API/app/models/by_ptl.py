@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 from enum import Enum
 from typing import Optional, Type, Union
@@ -338,3 +339,126 @@ class ByPtlQueuedResponse(BaseModel):
     wave_id: str = Field(..., alias="WAVEID")
     ptl_id: str = Field(..., alias="PTLID")
     message: str = Field(..., alias="Message")
+
+
+class SeparationOrderSummaryItem(BaseModel):
+    order_picking_id: int = Field(..., alias="OrderPickingID")
+    wave_id: Optional[str] = Field(default=None, alias="WaveID")
+    source: Optional[str] = Field(default=None, alias="Source")
+    source_label: Optional[str] = Field(default=None, alias="SourceLabel")
+    related_doc_type: Optional[str] = Field(default=None, alias="RelatedDocType")
+    related_order_id: Optional[int] = Field(default=None, alias="RelatedOrderID")
+    state_code: str = Field(..., alias="StateCode")
+    state_symbol: str = Field(..., alias="StateSymbol")
+    state_label: str = Field(..., alias="StateLabel")
+    creation_date: Optional[str] = Field(default=None, alias="CreationDate")
+    requested_execution_date: Optional[str] = Field(default=None, alias="RequestedExecutionDate")
+    customer_id: Optional[str] = Field(default=None, alias="CustomerID")
+    customer_name: Optional[str] = Field(default=None, alias="CustomerName")
+    assigned_user: Optional[str] = Field(default=None, alias="AssignedUser")
+    urgency_status_id: Optional[Union[int, str]] = Field(default=None, alias="UrgencyStatusID")
+    production_status: Optional[str] = Field(default=None, alias="ProductionStatus")
+    total_lines: int = Field(default=0, alias="TotalLines")
+    total_boxes: int = Field(default=0, alias="TotalBoxes")
+    total_quantity_to_pick: float = Field(default=0, alias="TotalQuantityToPick")
+    total_quantity_picked: float = Field(default=0, alias="TotalQuantityPicked")
+    completed_rows: int = Field(default=0, alias="CompletedRows")
+    progress_percentage: float = Field(default=0, alias="ProgressPercentage")
+
+
+class SeparationOrderListResponse(BaseModel):
+    items: list[SeparationOrderSummaryItem] = Field(..., alias="Items")
+    count: int = Field(..., alias="Count")
+
+
+class SeparationOrderBoxItem(BaseModel):
+    box_kind: str = Field(..., alias="BoxKind")
+    source_doc_type: Optional[str] = Field(default=None, alias="SourceDocType")
+    source_order_id: Optional[int] = Field(default=None, alias="SourceOrderID")
+    source_order_row: Optional[int] = Field(default=None, alias="SourceOrderRow")
+    vol_doc_cod: Optional[str] = Field(default=None, alias="VolDocCod")
+    vol_num: Optional[str] = Field(default=None, alias="VolNum")
+    vol_type_id: Optional[str] = Field(default=None, alias="VolTypeID")
+    user_id: Optional[str] = Field(default=None, alias="UserID")
+    item_id: Optional[str] = Field(default=None, alias="ItemID")
+    quantity: float = Field(default=0, alias="Quantity")
+
+
+class SeparationOrderLineDetail(BaseModel):
+    row_number: int = Field(..., alias="RowNumber")
+    state_code: str = Field(..., alias="StateCode")
+    state_symbol: str = Field(..., alias="StateSymbol")
+    state_label: str = Field(..., alias="StateLabel")
+    item_id: str = Field(..., alias="ItemID")
+    item_desc: Optional[str] = Field(default=None, alias="ItemDesc")
+    quantity_to_pick: float = Field(default=0, alias="QuantityToPick")
+    quantity_picked: float = Field(default=0, alias="QuantityPicked")
+    origin_doc_type: Optional[str] = Field(default=None, alias="OriginDocType")
+    origin_order_id: Optional[int] = Field(default=None, alias="OriginOrderID")
+    origin_order_row: Optional[int] = Field(default=None, alias="OriginOrderRow")
+    location_origin: Optional[str] = Field(default=None, alias="LocationOrigin")
+    location_dest: Optional[str] = Field(default=None, alias="LocationDest")
+    assigned_user: Optional[str] = Field(default=None, alias="AssignedUser")
+    planned_boxes: list[SeparationOrderBoxItem] = Field(default_factory=list, alias="PlannedBoxes")
+    picked_boxes: list[SeparationOrderBoxItem] = Field(default_factory=list, alias="PickedBoxes")
+
+
+class SeparationOrderDetailResponse(BaseModel):
+    header: SeparationOrderSummaryItem = Field(..., alias="Header")
+    lines: list[SeparationOrderLineDetail] = Field(..., alias="Lines")
+
+
+class SeparationOrderMaintenanceRequest(BaseModel):
+    assigned_user: Optional[str] = Field(default=None, alias="AssignedUser", max_length=50)
+    urgency_status_id: Optional[str] = Field(default=None, alias="UrgencyStatusID", max_length=50)
+
+    @field_validator("assigned_user", "urgency_status_id", mode="before")
+    @classmethod
+    def normalize_optional_text(cls, value: object) -> object:
+        return _normalize_text_value(value, empty_as_none=True)
+
+    @model_validator(mode="after")
+    def validate_payload(self) -> "SeparationOrderMaintenanceRequest":
+        if self.assigned_user is None and self.urgency_status_id is None:
+            raise ValueError("At least one of AssignedUser or UrgencyStatusID must be supplied")
+        return self
+
+
+class SeparationOrderMaintenanceResponse(BaseModel):
+    order_picking_id: int = Field(..., alias="OrderPickingID")
+    assigned_user: Optional[str] = Field(default=None, alias="AssignedUser")
+    urgency_status_id: Optional[str] = Field(default=None, alias="UrgencyStatusID")
+    message: str = Field(..., alias="Message")
+
+
+class SeparationOrderCancelRequest(BaseModel):
+    cancelled_by: Optional[str] = Field(default=None, alias="CancelledBy", max_length=50)
+    reason: Optional[str] = Field(default=None, alias="Reason", max_length=250)
+
+    @field_validator("cancelled_by", "reason", mode="before")
+    @classmethod
+    def normalize_cancel_text(cls, value: object) -> object:
+        return _normalize_text_value(value, empty_as_none=True)
+
+
+class SeparationOrderCancelResponse(BaseModel):
+    order_picking_id: int = Field(..., alias="OrderPickingID")
+    source: Optional[str] = Field(default=None, alias="Source")
+    state_code: str = Field(..., alias="StateCode")
+    production_status: str = Field(..., alias="ProductionStatus")
+    deleted: int = Field(..., alias="Deleted")
+    released_origin_documents: int = Field(..., alias="ReleasedOriginDocuments")
+    released_boxes: int = Field(..., alias="ReleasedBoxes")
+    cancelled_pkl_documents: int = Field(..., alias="CancelledPKLDocuments")
+    cancelled_related_documents: int = Field(default=0, alias="CancelledRelatedDocuments")
+    message: str = Field(..., alias="Message")
+
+
+class SeparationOrderMetadataEntry(BaseModel):
+    value: str = Field(..., alias="Value")
+    label: str = Field(..., alias="Label")
+
+
+class SeparationOrderMetadataResponse(BaseModel):
+    users: list[SeparationOrderMetadataEntry] = Field(..., alias="Users")
+    urgency_statuses: list[SeparationOrderMetadataEntry] = Field(..., alias="UrgencyStatuses")

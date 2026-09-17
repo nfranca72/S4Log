@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import socket
+import time
+from contextlib import contextmanager
 from pathlib import Path
+import re
 from typing import Any
 
 from fastapi import HTTPException
@@ -20,6 +23,12 @@ _MAC_COLUMN_CANDIDATES = (
 
 _SIMPLIFIED_MOVEMENT_TEMPLATE = "MS-CX-CAIXA.zpl"
 _SIMPLIFIED_MOVEMENT_LINES_PER_PAGE = 11
+_RFID_RESULT_VARS = (
+    "rfid.tag.read.result_line1",
+    "rfid.tag.read.result_line2",
+    "rfid.error.response",
+)
+_RFID_HOST_RESPONSE_PATTERN = re.compile(r"EPC:([0-9A-F]+)", re.IGNORECASE)
 
 
 def resolve_label_template(file_name: str) -> Path:
@@ -56,19 +65,321 @@ def zpl_field_value(value: object) -> str:
     return text.replace("^", " ").replace("~", " ").strip()
 
 
-def send_raw_to_printer(printer_name: str, payload: str, port: int | None = None) -> None:
+def _printer_target(printer_name: str, port: int | None = None) -> tuple[str, int]:
     target = (printer_name or "").strip()
     if not target:
         raise RuntimeError("PrinterName nao configurado em DocumentPrintConfig")
-
     printer_port = int(port or settings.ZEBRA_PRINTER_PORT or 9100)
+    return target, printer_port
+
+
+@contextmanager
+def open_printer_connection(printer_name: str, port: int | None = None):
+    target, printer_port = _printer_target(printer_name, port)
     try:
-        with socket.create_connection((target, printer_port), timeout=8) as sock:
-            sock.sendall(payload.encode("utf-8"))
+        with socket.create_connection(
+            (target, printer_port),
+            timeout=float(settings.ZEBRA_SOCKET_CONNECT_TIMEOUT or 8.0),
+        ) as sock:
+            yield sock
     except OSError as exc:
         raise RuntimeError(
             f"Nao foi possivel enviar para a impressora {target}:{printer_port}: {exc}"
         ) from exc
+
+
+def send_raw_to_printer(
+    printer_name: str,
+    payload: str,
+    port: int | None = None,
+    *,
+    sock: socket.socket | None = None,
+) -> None:
+    if sock is not None:
+        sock.sendall(payload.encode("utf-8"))
+        return
+
+    with open_printer_connection(printer_name, port) as printer_sock:
+        printer_sock.sendall(payload.encode("utf-8"))
+
+
+def reset_printer_rfid_log(
+    printer_name: str,
+    port: int | None = None,
+    *,
+    sock: socket.socket | None = None,
+) -> None:
+    if sock is None:
+        with open_printer_connection(printer_name, port) as printer_sock:
+            _do_printer_command(printer_sock, "rfid.log.clear")
+        return
+    _do_printer_command(sock, "rfid.log.clear")
+
+
+def read_printer_rfid_log_entries(
+    printer_name: str,
+    port: int | None = None,
+    *,
+    sock: socket.socket | None = None,
+) -> str:
+    if sock is None:
+        with open_printer_connection(printer_name, port) as printer_sock:
+            return _query_printer_var(printer_sock, "rfid.log.entries")
+    return _query_printer_var(sock, "rfid.log.entries")
+
+
+def collect_printer_host_epcs(
+    sock: socket.socket,
+    expected_count: int,
+    *,
+    idle_timeout: float | None = None,
+    label_timeout: float | None = None,
+    min_timeout: float | None = None,
+) -> tuple[list[str], str]:
+    effective_idle_timeout = float(idle_timeout or settings.ZEBRA_RFID_BATCH_IDLE_TIMEOUT or 1.2)
+    effective_label_timeout = float(label_timeout or settings.ZEBRA_RFID_BATCH_LABEL_TIMEOUT or 1.8)
+    effective_min_timeout = float(min_timeout or settings.ZEBRA_RFID_BATCH_MIN_TIMEOUT or 6.0)
+    deadline = time.monotonic() + max(effective_min_timeout, max(expected_count, 1) * effective_label_timeout)
+    raw_parts: list[str] = []
+    found_epcs: list[str] = []
+
+    while time.monotonic() < deadline and len(found_epcs) < expected_count:
+        response = _recv_printer_response(sock, timeout=effective_idle_timeout)
+        if response:
+            raw_parts.append(response)
+            found_epcs = parse_epcs_from_host_response("".join(raw_parts))
+            continue
+        if raw_parts:
+            break
+
+    raw_text = "".join(raw_parts)
+    return found_epcs, raw_text
+
+
+def parse_epcs_from_host_response(raw_response: str) -> list[str]:
+    if not raw_response:
+        return []
+    return [match.upper() for match in _RFID_HOST_RESPONSE_PATTERN.findall(str(raw_response or ""))]
+
+
+def parse_epcs_from_rfid_log_entries(raw_log_entries: str) -> list[str]:
+    epcs: list[str] = []
+    seen: set[str] = set()
+    for raw_line in str(raw_log_entries or "").splitlines():
+        line = raw_line.strip().strip("\x02").strip("\x03")
+        if not line or line in {"<start>", "<end>"}:
+            continue
+        parts = [part.strip() for part in line.split(",") if part.strip()]
+        candidate = parts[-1].upper() if parts else ""
+        if candidate and re.fullmatch(r"[0-9A-F]+", candidate) and candidate not in seen:
+            seen.add(candidate)
+            epcs.append(candidate)
+    return epcs
+
+
+def inject_rfid_read_host_commands(rendered_label: str) -> str:
+    payload = str(rendered_label or "").strip()
+    if not payload:
+        return payload
+    if "^RFR" in payload.upper() or "^HV" in payload.upper():
+        return payload
+    insertion = "^RFR,H,0,12,1^FN1^FS^HV1,,EPC:^FS"
+    upper_payload = payload.upper()
+    end_index = upper_payload.rfind("^XZ")
+    if end_index == -1:
+        return f"{payload}\n{insertion}\n^XZ"
+    return f"{payload[:end_index]}{insertion}{payload[end_index:]}"
+
+
+def blank_separator_label_zpl() -> str:
+    return "^XA^XZ"
+
+
+def read_printer_rfid_epc(
+    printer_name: str,
+    port: int | None = None,
+    *,
+    sock: socket.socket | None = None,
+    attempts: int | None = None,
+    settle_delay: float | None = None,
+    read_timeout: float | None = None,
+) -> str:
+    target, printer_port = _printer_target(printer_name, port)
+    effective_attempts = max(int(attempts or settings.ZEBRA_RFID_READ_ATTEMPTS or 2), 1)
+    effective_settle_delay = float(
+        settings.ZEBRA_RFID_SETTLE_DELAY if settle_delay is None else settle_delay
+    )
+    effective_read_timeout = float(
+        settings.ZEBRA_SOCKET_READ_TIMEOUT if read_timeout is None else read_timeout
+    )
+    last_error: str | None = None
+
+    for attempt in range(1, effective_attempts + 1):
+        if attempt > 1:
+            time.sleep(effective_settle_delay)
+
+        try:
+            if sock is None:
+                with open_printer_connection(printer_name, port) as printer_sock:
+                    epc, rfid_status = _read_printer_rfid_epc_once(
+                        printer_sock,
+                        read_timeout=effective_read_timeout,
+                        settle_delay=effective_settle_delay,
+                    )
+            else:
+                epc, rfid_status = _read_printer_rfid_epc_once(
+                    sock,
+                    read_timeout=effective_read_timeout,
+                    settle_delay=effective_settle_delay,
+                )
+
+            if epc and epc.lower() != "none":
+                return epc
+
+            if rfid_status and rfid_status.upper() not in {"RFID OK", "OK"}:
+                last_error = rfid_status
+            else:
+                last_error = "A impressora nao devolveu nenhum EPC"
+        except OSError as exc:
+            last_error = f"Nao foi possivel ler RFID na impressora {target}:{printer_port}: {exc}"
+
+    raise RuntimeError(last_error or "Nao foi possivel ler o EPC RFID na impressora")
+
+
+def save_item_rfid_tag(
+    item_id: str,
+    tag: str,
+    *,
+    color_id: str = "",
+    size_id: str = "",
+    order_num: int = 0,
+    cursor=None,
+) -> bool:
+    normalized_item_id = str(item_id or "").strip()
+    normalized_tag = str(tag or "").strip().upper()
+    if not normalized_item_id or not normalized_tag:
+        raise RuntimeError("ItemID e TAG sao obrigatorios para registar o RFID")
+
+    if cursor is not None:
+        cursor.execute(
+            "SELECT TOP 1 ItemID FROM ItemMasterRFIDTags WHERE TAG = ?",
+            (normalized_tag,),
+        )
+        existing = cursor.fetchone()
+        if existing:
+            return False
+
+        cursor.execute(
+            """
+            INSERT INTO ItemMasterRFIDTags (
+                ItemID, ColorID, GridID, OrderNum, SizeID,
+                TAG, available, deleted, created_by, created_date
+            ) VALUES (
+                ?, ?, '', ?, ?,
+                ?, 1, 0, 'AI', GETDATE()
+            )
+            """,
+            (
+                normalized_item_id,
+                str(color_id or "").strip(),
+                int(order_num or 0),
+                str(size_id or "").strip(),
+                normalized_tag,
+            ),
+        )
+        return True
+
+    with db_cursor() as (cursor, _):
+        return save_item_rfid_tag(
+            normalized_item_id,
+            normalized_tag,
+            color_id=color_id,
+            size_id=size_id,
+            order_num=order_num,
+            cursor=cursor,
+        )
+
+
+def _send_printer_command(sock: socket.socket, command: str) -> None:
+    sock.sendall(command.encode("utf-8"))
+
+
+def _do_printer_command(sock: socket.socket, command_name: str) -> str:
+    _send_printer_command(sock, f'! U1 do "{command_name}" ""\n')
+    return _recv_printer_response(sock)
+
+
+def _read_printer_rfid_epc_once(
+    sock: socket.socket,
+    *,
+    read_timeout: float,
+    settle_delay: float,
+) -> tuple[str, str]:
+    _drain_printer_socket(sock, read_timeout=0.05)
+    sock.settimeout(read_timeout)
+    _send_printer_command(sock, '! U1 setvar "rfid.tag.read.content" "epc"\n')
+    _send_printer_command(sock, '! U1 do "rfid.tag.read.execute" ""\n')
+    time.sleep(settle_delay)
+
+    result_line1 = _query_printer_var(sock, "rfid.tag.read.result_line1")
+    result_line2 = _query_printer_var(sock, "rfid.tag.read.result_line2")
+    rfid_status = _query_printer_var(sock, "rfid.error.response")
+    epc = f"{result_line1}{result_line2}".strip().upper()
+    return epc, str(rfid_status or "").strip()
+
+
+def _query_printer_var(sock: socket.socket, variable_name: str) -> str:
+    _send_printer_command(sock, f'! U1 getvar "{variable_name}"\n')
+    response = _recv_printer_response(sock)
+    return _parse_sgd_value(response)
+
+
+def _drain_printer_socket(sock: socket.socket, *, read_timeout: float) -> None:
+    previous_timeout = sock.gettimeout()
+    try:
+        sock.settimeout(read_timeout)
+        while True:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+    except socket.timeout:
+        pass
+    finally:
+        sock.settimeout(previous_timeout)
+
+
+def _recv_printer_response(sock: socket.socket, timeout: float | None = None) -> str:
+    chunks: list[bytes] = []
+    previous_timeout = sock.gettimeout()
+    while True:
+        try:
+            if timeout is not None:
+                sock.settimeout(timeout)
+            chunk = sock.recv(4096)
+        except socket.timeout:
+            break
+        if not chunk:
+            break
+        chunks.append(chunk)
+        if chunk.endswith(b"\n"):
+            break
+    if timeout is not None:
+        sock.settimeout(previous_timeout)
+    return b"".join(chunks).decode("utf-8", errors="ignore").strip()
+
+
+def _parse_sgd_value(response: str) -> str:
+    text = str(response or "").strip()
+    if not text:
+        return ""
+
+    if '"' in text:
+        first_quote = text.find('"')
+        last_quote = text.rfind('"')
+        if last_quote > first_quote:
+            return text[first_quote + 1:last_quote].strip()
+
+    return text.strip()
 
 
 def get_document_print_configs(

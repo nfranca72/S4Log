@@ -120,9 +120,3 @@ export function Spinner({ size = 20 }) {
 let _addToast = null
 export function setToastHandler(fn) { _addToast = fn }
 export function toast(msg, type = 'success') { _addToast?.(msg, type) }
-
-export function ToastContainer() {
-  const [toasts, setToasts] = import('react').then ? [] : []
-  // implemented in ToastProvider
-  return null
-}

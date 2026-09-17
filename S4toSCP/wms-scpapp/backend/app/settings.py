@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     DB_TRUST_SERVER_CERTIFICATE: str = "yes"
     API_HOST: str = "0.0.0.0"
     API_PORT: int = 8000
+    SEPARATION_DOC_TYPE: str = "SSCP"
 
     RFID_HOST: str = "0.0.0.0"
     RFID_PORT: int = 5084
@@ -44,6 +45,13 @@ class Settings(BaseSettings):
     RFID_BRIDGE_URL: str = "http://127.0.0.1:8003"
     RFID_BRIDGE_TUNNEL_1_URL: Optional[str] = None
     RFID_BRIDGE_TUNNEL_2_URL: Optional[str] = None
+    ZEBRA_SOCKET_CONNECT_TIMEOUT: float = 8.0
+    ZEBRA_SOCKET_READ_TIMEOUT: float = 0.8
+    ZEBRA_RFID_READ_ATTEMPTS: int = 2
+    ZEBRA_RFID_SETTLE_DELAY: float = 0.2
+    ZEBRA_RFID_BATCH_IDLE_TIMEOUT: float = 1.2
+    ZEBRA_RFID_BATCH_LABEL_TIMEOUT: float = 1.8
+    ZEBRA_RFID_BATCH_MIN_TIMEOUT: float = 6.0
 
     class Config:
         env_file = ".env"

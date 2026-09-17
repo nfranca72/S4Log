@@ -12,6 +12,11 @@ import SAPB1 from './pages/SAPB1'
 import SimplifiedMovements from './pages/SimplifiedMovements'
 import Abastecimento from './pages/Abastecimento'
 import Contagem from './pages/Contagem'
+import BenficaItemsImport from './pages/BenficaItemsImport'
+import SeparationDocument from './pages/SeparationDocument'
+import SeparationOrdersConsultation from './pages/SeparationOrdersConsultation'
+import SeparationOrdersConsultationExecution from './pages/SeparationOrdersConsultationExecution'
+import SeparationExecution from './pages/SeparationExecution'
 
 const SPLASH_SESSION_KEY = 's4log:splash-seen'
 
@@ -42,11 +47,16 @@ export default function App() {
           <Route path="/"           element={<Navigate to="/importacao" replace />} />
           <Route path="/importacao" element={<Module1 />} />
           <Route path="/recepcao"   element={<Module2 />} />
+          <Route path="/import-artigos-benfica" element={<BenficaItemsImport />} />
           <Route path="/contagem"   element={<Contagem />} />
           <Route path="/consulta"   element={<Module3 />} />
           <Route path="/etiquetas"  element={<Labels />} />
           <Route path="/movimentos" element={<SimplifiedMovements />} />
           <Route path="/abastecimento" element={<Abastecimento />} />
+          <Route path="/documento-separacao" element={<SeparationDocument />} />
+          <Route path="/consulta-separacoes" element={<SeparationOrdersConsultation />} />
+          <Route path="/execucao-separacoes" element={<SeparationOrdersConsultationExecution />} />
+          <Route path="/execucao-separacoes/:orderPickingId" element={<SeparationExecution />} />
           <Route path="/sap-b1" element={<SAPB1 />} />
           <Route path="/configuracao" element={<Config />} />
         </Routes>

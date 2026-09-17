@@ -1,5 +1,6 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { Btn } from '../components/ui'
+import { useToast } from '../context/ToastContext'
 import styles from './Module3.module.css'
 
 const BASE = import.meta.env.VITE_API_URL ?? '/api'
@@ -547,6 +548,7 @@ function ViewByBox({ selected }) {
 }
 
 function PackingConsultation() {
+  const toast = useToast()
   const [docType,  setDocType]  = useState('PSCP')
   const [status,   setStatus]   = useState('TODOS')
   const [viewMode, setViewMode] = useState('artigo')
@@ -554,23 +556,69 @@ function PackingConsultation() {
   const [loading,  setLoading]  = useState(false)
   const [selected, setSelected] = useState(null)
   const [searchText, setSearchText] = useState('')
+  const [highlighted, setHighlighted] = useState(() => new Set())
+  const rowRefs = useRef({})
+  const highlightTokenRef = useRef(0)
+
+  const selectAndReveal = useCallback((matches) => {
+    if (!matches.length) return
+    setSelected(matches[0])
+    setHighlighted(new Set(matches.map(p => p.order_id)))
+    requestAnimationFrame(() => {
+      rowRefs.current[matches[0].order_id]?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    })
+    const token = ++highlightTokenRef.current
+    setTimeout(() => {
+      if (highlightTokenRef.current === token) setHighlighted(new Set())
+    }, 1800)
+  }, [])
 
   const search = useCallback(async () => {
-    setLoading(true); setSelected(null)
+    setLoading(true); setSelected(null); setHighlighted(new Set())
     try {
       const data = await api.get(`/consulting/packings?doc_type=${docType}&status=${status}`)
-      let result = Array.isArray(data) ? data : []
-      if (searchText.trim()) {
-        const q = searchText.trim().toLowerCase()
-        result = result.filter(p =>
-          String(p.order_id).includes(q) ||
-          (p.requester_id || '').toLowerCase().includes(q)
-        )
-      }
+      const result = Array.isArray(data) ? data : []
       setPackings(result)
+
+      const q = searchText.trim()
+      if (q) {
+        const ql = q.toLowerCase()
+        let matches = result.filter(p =>
+          String(p.order_id).toLowerCase().includes(ql) ||
+          (p.requester_id || '').toLowerCase().includes(ql)
+        )
+        let outsideFilterIds = []
+
+        // Não encontrado ao nível do documento — procura o nº de caixa ou a
+        // referência/código de artigo dentro das caixas dos documentos deste tipo.
+        // O artigo/caixa pode existir em vários documentos, por isso guarda-se
+        // sempre a lista completa, não só o primeiro resultado.
+        if (!matches.length) {
+          try {
+            const orderIds = await api.get(`/consulting/packings/search?doc_type=${docType}&q=${encodeURIComponent(q)}`)
+            const ids = Array.isArray(orderIds) ? orderIds : []
+            matches = result.filter(p => ids.includes(p.order_id))
+            outsideFilterIds = ids.filter(id => !result.some(p => p.order_id === id))
+          } catch { /* ignora falha da pesquisa por conteúdo, cai no aviso de não encontrado */ }
+        }
+
+        if (matches.length) {
+          selectAndReveal(matches)
+          if (matches.length > 1) {
+            toast(`Encontrado em ${matches.length} documentos — destacados na tabela.`, 'success')
+          }
+          if (outsideFilterIds.length) {
+            toast(`Também existe em ${outsideFilterIds.length} documento(s) fora do estado "${status}" (nº ${outsideFilterIds.join(', ')}) — muda o filtro Estado para "Todos" para os ver.`, 'error')
+          }
+        } else if (outsideFilterIds.length) {
+          toast(`Encontrado em ${outsideFilterIds.length} documento(s), mas fora do estado "${status}" selecionado — muda o filtro Estado para "Todos".`, 'error')
+        } else {
+          toast(`Nenhum documento, caixa ou artigo encontrado para "${q}"`, 'error')
+        }
+      }
     } catch { setPackings([]) }
     finally { setLoading(false) }
-  }, [docType, status])
+  }, [docType, status, searchText, toast, selectAndReveal])
 
   useEffect(() => { search() }, [])
 
@@ -615,7 +663,7 @@ function PackingConsultation() {
         <div className={styles.filterGroup}>
           <label>Pesquisa</label>
           <input
-            type="text" placeholder="Nº interno ou ref. cliente..."
+            type="text" placeholder="Nº interno, ref. cliente, nº de caixa ou referência de artigo..."
             value={searchText} onChange={e => setSearchText(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && search()}
             className={styles.searchInput}
@@ -647,7 +695,8 @@ function PackingConsultation() {
                   const st = STATUS_LABELS[p.status] || { label: p.status, color: '#888' }
                   return (
                     <tr key={p.order_id}
-                      className={selected?.order_id === p.order_id ? styles.rowSelected : styles.row}
+                      ref={el => { rowRefs.current[p.order_id] = el }}
+                      className={`${selected?.order_id === p.order_id ? styles.rowSelected : styles.row} ${highlighted.has(p.order_id) ? styles.rowFound : ''}`}
                       onClick={() => setSelected(p)}>
                       <td className={styles.mono}>{p.order_id}</td>
                       <td className={styles.mono}>{p.requester_id || '—'}</td>

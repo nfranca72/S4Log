@@ -1,0 +1,14 @@
+{
+  "printer_ip": "172.16.16.209",
+  "printer_port": 9100,
+  "mode": "explicit-rfid-read",
+  "copies_printed": 2,
+  "timestamp_utc": "2026-08-05T17:24:33.612703+00:00",
+  "device_unique_id": "99J251005239",
+  "rfid_log_enabled": "yes",
+  "rfid_error_response": "RFID OK",
+  "last_result_line1": "E280F302000000014EEE",
+  "last_result_line2": "86AA",
+  "rfid_log_entries": "\u0002<start>\r\nAug-05-2026 18:24:45,R,B5,A2,22,00000000,837E3400E280F30200000001\r\nAug-05-2026 18:24:45,R,B5,A2,22,00000000,837E3400E280F30200000001\r\nAug-05-2026 18:24:46,R,B5,A2,22,00000000,A5AD3400E280F30200000001\r\nAug-05-2026 18:24:46,R,B5,A2,22,00000000,A5AD3400E280F30200000001\r\n<end>\r\n\u0003\r\n",
+  "host_response": "EPC:837E3400E280F30200000001EPC:A5AD3400E280F30200000001"
+}

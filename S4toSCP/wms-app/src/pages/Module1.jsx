@@ -440,6 +440,9 @@ function TabPacking() {
   const [escpOrders, setEscpOrders]       = useState([])
   const [selectedEscp, setSelectedEscp]   = useState(null)
   const [escpLoaded, setEscpLoaded]       = useState(false)
+  const [duplicateAck, setDuplicateAck]   = useState(false)
+  const [unresolvedAck, setUnresolvedAck] = useState(false)
+  const [manualCodes, setManualCodes]     = useState({})
   const debounceRef = useRef(null)
   const fileRef     = useRef(null)
 
@@ -502,10 +505,53 @@ function TabPacking() {
   const newItems = (() => {
     if (!preview) return []
     const seen = new Set()
-    return preview.rows.filter(r => { if (r.exists_in_db || seen.has(r.item_id)) return false; seen.add(r.item_id); return true })
+    // Linhas por resolver ficam de fora — o item_id é só um prefixo incompleto,
+    // não deve ser criado no ItemMaster antes de o operador confirmar o código real.
+    return preview.rows.filter(r => {
+      if (!r.resolved || r.exists_in_db || seen.has(r.item_id)) return false
+      seen.add(r.item_id); return true
+    })
   })()
 
   const packingBlocks = preview?.packings?.length ? preview.packings : []
+
+  const duplicateRequesterIds = (() => {
+    if (!preview) return []
+    if (packingBlocks.length) {
+      return packingBlocks
+        .filter(p => p.requester_id_duplicate_orders?.length)
+        .map(p => ({ doc_num: p.header.doc_num, orders: p.requester_id_duplicate_orders }))
+    }
+    return preview.requester_id_duplicate_orders?.length
+      ? [{ doc_num: preview.header.doc_num, orders: preview.requester_id_duplicate_orders }]
+      : []
+  })()
+  const hasDuplicateRequesterIds = duplicateRequesterIds.length > 0
+
+  // Linhas sem ligação confirmada à encomenda ESCP — o código gerado a partir do CSV
+  // fica incompleto (falta o sufixo real, ex: -DOT, -NEG). Precisam de ser completadas
+  // manualmente pelo operador; se não forem, ficam de fora da importação.
+  const rowKey = (r) => `${r.box_barcode}|${r.style_code}|${r.color_code}|${r.size}|${r.season_desc}`
+  const unresolvedRows = (preview?.rows ?? []).filter(r => !r.resolved)
+  const hasUnresolvedRows = unresolvedRows.length > 0
+
+  const applyRowResolution = (target, itemId, existsInDb = null) => {
+    setPreview(prev => {
+      if (!prev) return prev
+      const matches = (r) => rowKey(r) === rowKey(target)
+      const patch = (r) => matches(r) ? { ...r, item_id: itemId, resolved: true, exists_in_db: existsInDb, candidate_item_ids: [] } : r
+      return {
+        ...prev,
+        rows: prev.rows.map(patch),
+        packings: prev.packings?.length ? prev.packings.map(block => ({ ...block, rows: block.rows.map(patch) })) : prev.packings,
+      }
+    })
+    setManualCodes(current => {
+      const next = { ...current }
+      delete next[rowKey(target)]
+      return next
+    })
+  }
 
   const doCreateArticles = async () => {
     setLoading(true)
@@ -544,7 +590,8 @@ function TabPacking() {
   const reset = () => {
     setStep(1); setPreview(null); setClient(null); setClientQuery('')
     setResult(null); setFilter('all'); setSearch(''); setArticlesCreated(false)
-    setSelectedEscp(null)
+    setSelectedEscp(null); setDuplicateAck(false)
+    setUnresolvedAck(false); setManualCodes({})
   }
 
   const h = preview?.header
@@ -601,6 +648,84 @@ function TabPacking() {
             <Stat label="Já existem"      value={preview.existing_articles} color="var(--green)" />
             <Stat label="A criar"         value={preview.new_articles}      color="var(--yellow)" />
           </StatsBar>
+
+          {hasDuplicateRequesterIds && (
+            <Card>
+              <ResultBanner
+                ok={false}
+                title="Nº de documento já importado anteriormente"
+                detail={duplicateRequesterIds
+                  .map(d => `Doc. ${d.doc_num} → já existe no(s) packing(s) #${d.orders.join(', #')}`)
+                  .join('  •  ')}
+              />
+              <label style={{display:'flex',alignItems:'center',gap:8,marginTop:12,fontSize:13,color:'var(--text2)',cursor:'pointer'}}>
+                <input type="checkbox" checked={duplicateAck} onChange={e => setDuplicateAck(e.target.checked)} />
+                Confirmo que revi os documentos acima e quero continuar mesmo assim (pode ser uma reimportação duplicada)
+              </label>
+            </Card>
+          )}
+
+          {hasUnresolvedRows && (
+            <Card>
+              <ResultBanner
+                ok={false}
+                title={`${unresolvedRows.length} linha(s) sem ligação à encomenda ESCP`}
+                detail="O código completo do artigo não pôde ser construído (falta informação como o sufixo -DOT ou -NEG, que só existe na encomenda). Completa manualmente abaixo ou estas linhas não serão importadas — sem código, não há entrada de caixa para esses artigos."
+              />
+              <div className={styles.tableWrap} style={{marginTop:14}}>
+                <table className={styles.table}>
+                  <thead><tr>
+                    <th>Caixa</th><th>Style/Cor/Tam.</th><th>Ref. (PO)</th>
+                    <th style={{textAlign:'right'}}>Qtd.</th><th>Código correto</th><th></th>
+                  </tr></thead>
+                  <tbody>
+                    {unresolvedRows.map((r, i) => {
+                      const key = rowKey(r)
+                      const manualValue = manualCodes[key] ?? ''
+                      return (
+                        <tr key={key + i}>
+                          <td className={styles.mono} style={{fontSize:12}}>{r.box_barcode}</td>
+                          <td className={styles.mono} style={{fontSize:12}}>{r.style_code}/{r.color_code}/{r.size}</td>
+                          <td className={styles.desc} style={{fontSize:12}}>{r.season_desc}</td>
+                          <td className={styles.mono} style={{textAlign:'right'}}>{r.qty_box}</td>
+                          <td>
+                            {r.candidate_item_ids?.length > 0 && (
+                              <select
+                                className={styles.select}
+                                style={{fontSize:12,marginBottom:4}}
+                                value=""
+                                onChange={e => e.target.value && applyRowResolution(r, e.target.value, true)}
+                              >
+                                <option value="">— escolher candidato —</option>
+                                {r.candidate_item_ids.map(id => <option key={id} value={id}>{id}</option>)}
+                              </select>
+                            )}
+                            <input
+                              className={styles.searchInput}
+                              style={{fontSize:12,fontFamily:'var(--font-mono)'}}
+                              placeholder="ou escreve o código completo..."
+                              value={manualValue}
+                              onChange={e => setManualCodes(current => ({ ...current, [key]: e.target.value }))}
+                              onKeyDown={e => e.key === 'Enter' && manualValue.trim() && applyRowResolution(r, manualValue.trim())}
+                            />
+                          </td>
+                          <td>
+                            <Btn variant="outline" disabled={!manualValue.trim()} onClick={() => applyRowResolution(r, manualValue.trim())}>
+                              Usar
+                            </Btn>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <label style={{display:'flex',alignItems:'center',gap:8,marginTop:12,fontSize:13,color:'var(--text2)',cursor:'pointer'}}>
+                <input type="checkbox" checked={unresolvedAck} onChange={e => setUnresolvedAck(e.target.checked)} />
+                Estou ciente de que as linhas por resolver acima não serão importadas
+              </label>
+            </Card>
+          )}
 
           <Card>
             <CardTitle>Informação do documento</CardTitle>
@@ -721,11 +846,21 @@ function TabPacking() {
                   </>
             }
           </Card>
+          {hasDuplicateRequesterIds && !duplicateAck && (
+            <p style={{color:'var(--yellow)',fontSize:13,marginBottom:8}}>
+              ⚠ Volta ao passo anterior e confirma a caixa de verificação para poderes importar — o nº de documento já existe noutro packing.
+            </p>
+          )}
+          {hasUnresolvedRows && !unresolvedAck && (
+            <p style={{color:'var(--yellow)',fontSize:13,marginBottom:8}}>
+              ⚠ Volta ao passo anterior — há {unresolvedRows.length} linha(s) sem código de artigo completo por resolver ou confirmar.
+            </p>
+          )}
           <div className={styles.actions}>
             <Btn variant="outline" onClick={() => setStep(2)}>← Voltar</Btn>
             {newItems.length > 0 && !articlesCreated
               ? <Btn variant="primary" loading={loading} onClick={doCreateArticles}>Criar {newItems.length} artigo(s) →</Btn>
-              : <Btn variant="success" loading={loading} onClick={doImport}>Importar packing list →</Btn>
+              : <Btn variant="success" loading={loading} disabled={(hasDuplicateRequesterIds && !duplicateAck) || (hasUnresolvedRows && !unresolvedAck)} onClick={doImport}>Importar packing list →</Btn>
             }
           </div>
         </>

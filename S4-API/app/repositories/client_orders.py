@@ -760,6 +760,8 @@ def fetch_components_by_document_color(
     color_id_clause = ""
     params: list[Any] = [doc_type, order_id]
 
+    normalized_color_id = color_id.strip()
+
     if order_row is not None:
         detail_order_row_clause = "AND OrderRow = ?"
         component_order_row_clause = "AND coc.OrderRow = ?"
@@ -770,9 +772,9 @@ def fetch_components_by_document_color(
     if order_row is not None:
         params.append(order_row)
 
-    if color_id:
-        color_id_clause = "AND cod.ColorID = ?"
-        params.append(color_id)
+    if normalized_color_id:
+        color_id_clause = "AND LTRIM(RTRIM(ISNULL(cod.ColorID, ''))) = ?"
+        params.append(normalized_color_id)
 
     if component_id:
         component_id_clause = "AND coc.ComponentID = ?"

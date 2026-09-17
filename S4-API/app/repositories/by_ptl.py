@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from uuid import uuid4
@@ -1351,6 +1351,1233 @@ def _standard_item_master_value(
         return b""
 
     return ""
+
+
+def fetch_separation_orders(
+    from_date: str | None,
+    to_date: str | None,
+    only_open: bool,
+    only_executed: bool,
+    include_cancelled: bool,
+) -> dict[str, Any]:
+    if only_open and only_executed:
+        raise ValueError("OnlyOpen and OnlyExecuted cannot both be true")
+
+    from_dt = _parse_optional_date(from_date, "FromDate")
+    to_dt = _parse_optional_date(to_date, "ToDate")
+    if from_dt and to_dt and from_dt > to_dt:
+        raise ValueError("FromDate cannot be greater than ToDate")
+
+    wave_column = _client_orders_wave_column_name()
+    params: list[Any] = []
+    where_parts = ["ISNULL(op.SeparationOrder, 0) = 1"]
+    if from_dt is not None:
+        where_parts.append("CAST(op.Date AS date) >= ?")
+        params.append(from_dt)
+    if to_dt is not None:
+        where_parts.append("CAST(op.Date AS date) <= ?")
+        params.append(to_dt)
+
+    query = f"""
+        ;WITH DetailAgg AS (
+            SELECT
+                opd.OrderID,
+                COUNT(*) AS TotalLines,
+                SUM(ISNULL(opd.Qty, 0)) AS TotalQuantityToPick,
+                SUM(ISNULL(opd.QtyPicked, 0)) AS TotalQuantityPicked
+            FROM OrdersPickingDetails opd WITH (NOLOCK)
+            WHERE ISNULL(opd.deleted, 0) = 0
+            GROUP BY opd.OrderID
+        ),
+        ResumeAgg AS (
+            SELECT
+                opr.ID AS OrderPickingID,
+                ISNULL(opr.TotalRows, 0) AS TotalRows,
+                ISNULL(opr.CompletedRows, 0) AS CompletedRows
+            FROM OrdersPickingResume opr WITH (NOLOCK)
+        ),
+        ClientAgg AS (
+            SELECT
+                opd.OrderID,
+                MAX(co.ClientID) AS CustomerID,
+                MAX(bp.PartnerName) AS CustomerName
+            FROM OrdersPickingDetails opd WITH (NOLOCK)
+            JOIN ClientOrders co WITH (NOLOCK)
+              ON co.DocType = opd.DocTypeOri
+             AND co.OrderID = opd.OrderIDOri
+            LEFT JOIN BusinessPartners bp WITH (NOLOCK)
+              ON bp.PartnerType = 'C'
+             AND bp.PartnerID = co.ClientID
+            WHERE ISNULL(opd.deleted, 0) = 0
+            GROUP BY opd.OrderID
+        ),
+        BoxAgg AS (
+            SELECT
+                opd.OrderID,
+                COUNT(DISTINCT CONCAT(ISNULL(CONVERT(varchar(50), vm.VolDocCod), ''), '|', ISNULL(CONVERT(varchar(50), vm.VolNum), ''))) AS TotalBoxes
+            FROM OrdersPickingDetails opd WITH (NOLOCK)
+            JOIN VolMaster vm WITH (NOLOCK)
+              ON vm.ParentDocType = opd.DocTypeOri
+             AND vm.ParentOrderID = opd.OrderIDOri
+            WHERE ISNULL(opd.deleted, 0) = 0
+            GROUP BY opd.OrderID
+        ),
+        PklAgg AS (
+            SELECT
+                co.{wave_column} AS WaveID,
+                MAX(co.OrderID) AS PKLOrderID
+            FROM ClientOrders co WITH (NOLOCK)
+            WHERE co.DocType = 'PKL'
+            GROUP BY co.{wave_column}
+        )
+        SELECT
+            op.ID AS OrderPickingID,
+            op.OrderPickingGroup AS WaveID,
+            op.Date AS CreationDate,
+            op.DueDate AS RequestedExecutionDate,
+            op.AssignedUser,
+            op.UrgencyStatusID,
+            ISNULL(op.ProductionStatus, '') AS ProductionStatus,
+            ISNULL(op.deleted, 0) AS Deleted,
+            ca.CustomerID,
+            ca.CustomerName,
+            ISNULL(da.TotalLines, 0) AS TotalLines,
+            ISNULL(ba.TotalBoxes, 0) AS TotalBoxes,
+            ISNULL(da.TotalQuantityToPick, 0) AS TotalQuantityToPick,
+            ISNULL(da.TotalQuantityPicked, 0) AS TotalQuantityPicked,
+            CASE WHEN ra.OrderPickingID IS NULL THEN 0 ELSE 1 END AS HasResume,
+            ra.TotalRows,
+            ra.CompletedRows,
+            pa.PKLOrderID
+        FROM OrdersPicking op WITH (NOLOCK)
+        LEFT JOIN DetailAgg da
+          ON da.OrderID = op.ID
+        LEFT JOIN ResumeAgg ra
+          ON ra.OrderPickingID = op.ID
+        LEFT JOIN ClientAgg ca
+          ON ca.OrderID = op.ID
+        LEFT JOIN BoxAgg ba
+          ON ba.OrderID = op.ID
+        LEFT JOIN PklAgg pa
+          ON pa.WaveID = op.OrderPickingGroup
+        WHERE {' AND '.join(where_parts)}
+        ORDER BY op.Date DESC, op.ID DESC
+    """
+
+    with db_cursor() as (cursor, _conn):
+        cursor.execute(query, tuple(params))
+        rows = [_row_to_dict(cursor, row) for row in cursor.fetchall()]
+
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        summary = _build_separation_order_summary(row)
+        summary.update(_fetch_separation_order_context(summary["OrderPickingID"]))
+        if not include_cancelled and summary["StateCode"] == "cancelled":
+            continue
+        if only_open and summary["StateCode"] not in {"initial", "in_progress"}:
+            continue
+        if only_executed and summary["StateCode"] != "completed":
+            continue
+        items.append(summary)
+
+    return {"Items": items, "Count": len(items)}
+
+
+def fetch_separation_order_detail(order_picking_id: int) -> dict[str, Any] | None:
+    summary_row = _fetch_separation_order_header_row(order_picking_id)
+    if summary_row is None:
+        return None
+
+    header = _build_separation_order_summary(summary_row)
+    header.update(_fetch_separation_order_context(order_picking_id))
+    planned_boxes = _fetch_separation_order_boxes(order_picking_id, box_kind="planned")
+    picked_boxes = _fetch_separation_order_boxes(order_picking_id, box_kind="picked")
+
+    planned_by_row: dict[int, list[dict[str, Any]]] = {}
+    for box in planned_boxes:
+        planned_by_row.setdefault(int(box["SourceOrderRow"] or 0), []).append(box)
+
+    picked_by_row: dict[int, list[dict[str, Any]]] = {}
+    for box in picked_boxes:
+        picked_by_row.setdefault(int(box["SourceOrderRow"] or 0), []).append(box)
+
+    with db_cursor() as (cursor, _conn):
+        cursor.execute(
+            """
+            SELECT
+                opd.RowNumber,
+                opd.ItemID,
+                im.ItemDesc,
+                ISNULL(opd.QtyToPick, opd.Qty) AS QuantityToPick,
+                ISNULL(opd.QtyPicked, 0) AS QuantityPicked,
+                opd.DocTypeOri AS OriginDocType,
+                opd.OrderIDOri AS OriginOrderID,
+                opd.OrderRowOri AS OriginOrderRow,
+                opd.LocationIDOri AS LocationOrigin,
+                opd.LocationIDDest AS LocationDest,
+                opd.AssignedUser,
+                ISNULL(opd.deleted, 0) AS Deleted,
+                ISNULL(opd.PickingCompleted, 0) AS PickingCompleted
+            FROM OrdersPickingDetails opd WITH (NOLOCK)
+            LEFT JOIN ItemMaster im WITH (NOLOCK)
+              ON im.ItemID = opd.ItemID
+            WHERE opd.OrderID = ?
+            ORDER BY opd.RowNumber
+            """,
+            (order_picking_id,),
+        )
+        rows = [_row_to_dict(cursor, row) for row in cursor.fetchall()]
+
+    lines: list[dict[str, Any]] = []
+    for row in rows:
+        quantity_to_pick = _to_float(row.get("QuantityToPick"))
+        quantity_picked = _to_float(row.get("QuantityPicked"))
+        line_state = _line_state(
+            deleted=_to_int(row.get("Deleted")),
+            picking_completed=_to_int(row.get("PickingCompleted")),
+            quantity_to_pick=quantity_to_pick,
+            quantity_picked=quantity_picked,
+        )
+        origin_row = _to_int(row.get("OriginOrderRow"))
+        lines.append(
+            {
+                "RowNumber": _to_int(row.get("RowNumber")),
+                "StateCode": line_state["code"],
+                "StateSymbol": line_state["symbol"],
+                "StateLabel": line_state["label"],
+                "ItemID": row.get("ItemID") or "",
+                "ItemDesc": row.get("ItemDesc"),
+                "QuantityToPick": quantity_to_pick,
+                "QuantityPicked": quantity_picked,
+                "OriginDocType": row.get("OriginDocType"),
+                "OriginOrderID": _nullable_int(row.get("OriginOrderID")),
+                "OriginOrderRow": origin_row if origin_row > 0 else None,
+                "LocationOrigin": row.get("LocationOrigin"),
+                "LocationDest": row.get("LocationDest"),
+                "AssignedUser": row.get("AssignedUser"),
+                "PlannedBoxes": planned_by_row.get(origin_row, []),
+                "PickedBoxes": picked_by_row.get(origin_row, []),
+            }
+        )
+
+    return {"Header": header, "Lines": lines}
+
+
+def update_separation_order_maintenance(
+    order_picking_id: int,
+    assigned_user: str | None,
+    urgency_status_id: str | None,
+) -> dict[str, Any]:
+    with db_cursor() as (cursor, _conn):
+        cache: dict[str, dict[str, str]] = {}
+        if not _order_picking_exists(cursor, order_picking_id):
+            raise ValueError(f"OrdersPicking ID {order_picking_id} was not found")
+
+        if assigned_user is not None:
+            _validate_user_exists(cursor, assigned_user)
+        if urgency_status_id is not None:
+            _validate_urgency_status_exists(cursor, urgency_status_id)
+
+        now = datetime.now()
+        columns = _table_columns(cursor, "OrdersPicking", cache)
+        set_parts: list[str] = []
+        params: list[Any] = []
+
+        if assigned_user is not None and "assigneduser" in columns:
+            set_parts.append(f"{columns['assigneduser']} = ?")
+            params.append(assigned_user)
+        if urgency_status_id is not None and "urgencystatusid" in columns:
+            set_parts.append(f"{columns['urgencystatusid']} = ?")
+            params.append(urgency_status_id)
+        if "edited_by" in columns:
+            set_parts.append(f"{columns['edited_by']} = ?")
+            params.append("Ons3")
+        if "edited_date" in columns:
+            set_parts.append(f"{columns['edited_date']} = ?")
+            params.append(now)
+
+        if not set_parts:
+            raise ValueError("OrdersPicking does not expose editable maintenance columns")
+
+        params.append(order_picking_id)
+        cursor.execute(
+            f"""
+            UPDATE OrdersPicking
+            SET {', '.join(set_parts)}
+            WHERE ID = ?
+            """,
+            tuple(params),
+        )
+
+        if assigned_user is not None:
+            detail_columns = _table_columns(cursor, "OrdersPickingDetails", cache)
+            detail_set_parts: list[str] = []
+            detail_params: list[Any] = []
+            if "assigneduser" in detail_columns:
+                detail_set_parts.append(f"{detail_columns['assigneduser']} = ?")
+                detail_params.append(assigned_user)
+            if "edited_by" in detail_columns:
+                detail_set_parts.append(f"{detail_columns['edited_by']} = ?")
+                detail_params.append("Ons3")
+            if "edited_date" in detail_columns:
+                detail_set_parts.append(f"{detail_columns['edited_date']} = ?")
+                detail_params.append(now)
+            if detail_set_parts:
+                detail_params.append(order_picking_id)
+                cursor.execute(
+                    f"""
+                    UPDATE OrdersPickingDetails
+                    SET {', '.join(detail_set_parts)}
+                    WHERE OrderID = ?
+                      AND ISNULL(deleted, 0) = 0
+                    """,
+                    tuple(detail_params),
+                )
+
+    return {
+        "OrderPickingID": order_picking_id,
+        "AssignedUser": assigned_user,
+        "UrgencyStatusID": urgency_status_id,
+        "Message": "Separation order updated successfully",
+    }
+
+
+def cancel_separation_order(
+    order_picking_id: int,
+    cancelled_by: str | None,
+    reason: str | None,
+) -> dict[str, Any]:
+    actor = cancelled_by or "Ons3"
+    now = datetime.now()
+
+    with db_cursor() as (cursor, _conn):
+        cache: dict[str, dict[str, str]] = {}
+        if not _order_picking_exists(cursor, order_picking_id):
+            raise ValueError(f"OrdersPicking ID {order_picking_id} was not found")
+
+        origin_rows = _fetch_origin_rows(cursor, order_picking_id)
+        wave_id = _fetch_wave_id(cursor, order_picking_id)
+        pkl_order_id = _fetch_pkl_order_id_by_wave(cursor, cache, wave_id) if wave_id else None
+        related_documents = _fetch_related_target_documents(cursor, order_picking_id, include_pkl=True)
+        source_context = _resolve_separation_order_context_from_docs(
+            order_picking_id=order_picking_id,
+            wave_id=wave_id,
+            related_documents=related_documents,
+        )
+
+        released_boxes = _release_related_boxes(
+            cursor=cursor,
+            cache=cache,
+            origin_rows=origin_rows,
+            pkl_order_id=pkl_order_id,
+            related_documents=related_documents,
+        )
+        released_origin_documents = _release_origin_documents(
+            cursor=cursor,
+            cache=cache,
+            origin_rows=origin_rows,
+        )
+        cancelled_pkl_documents, cancelled_related_documents = _cancel_related_documents(
+            cursor=cursor,
+            cache=cache,
+            related_documents=related_documents,
+            actor=actor,
+            now=now,
+        )
+
+        _mark_orders_picking_cancelled(
+            cursor=cursor,
+            cache=cache,
+            order_picking_id=order_picking_id,
+            actor=actor,
+            reason=reason,
+            now=now,
+        )
+        _mark_orders_picking_details_cancelled(
+            cursor=cursor,
+            cache=cache,
+            order_picking_id=order_picking_id,
+            now=now,
+        )
+
+    return {
+        "OrderPickingID": order_picking_id,
+        "Source": source_context["Source"],
+        "StateCode": "cancelled",
+        "ProductionStatus": "ANULADO",
+        "Deleted": 1,
+        "ReleasedOriginDocuments": released_origin_documents,
+        "ReleasedBoxes": released_boxes,
+        "CancelledPKLDocuments": cancelled_pkl_documents,
+        "CancelledRelatedDocuments": cancelled_related_documents,
+        "Message": "Separation order cancelled successfully",
+    }
+
+
+def fetch_separation_order_metadata() -> dict[str, Any]:
+    with db_cursor() as (cursor, _conn):
+        users = _fetch_users_metadata(cursor)
+        urgency_statuses = _fetch_urgency_status_metadata(cursor)
+    return {"Users": users, "UrgencyStatuses": urgency_statuses}
+
+
+def _fetch_separation_order_header_row(order_picking_id: int) -> dict[str, Any] | None:
+    wave_column = _client_orders_wave_column_name()
+    query = f"""
+        ;WITH DetailAgg AS (
+            SELECT
+                opd.OrderID,
+                COUNT(*) AS TotalLines,
+                SUM(ISNULL(opd.Qty, 0)) AS TotalQuantityToPick,
+                SUM(ISNULL(opd.QtyPicked, 0)) AS TotalQuantityPicked
+            FROM OrdersPickingDetails opd WITH (NOLOCK)
+            WHERE ISNULL(opd.deleted, 0) = 0
+            GROUP BY opd.OrderID
+        ),
+        ResumeAgg AS (
+            SELECT
+                opr.ID AS OrderPickingID,
+                ISNULL(opr.TotalRows, 0) AS TotalRows,
+                ISNULL(opr.CompletedRows, 0) AS CompletedRows
+            FROM OrdersPickingResume opr WITH (NOLOCK)
+        ),
+        ClientAgg AS (
+            SELECT
+                opd.OrderID,
+                MAX(co.ClientID) AS CustomerID,
+                MAX(bp.PartnerName) AS CustomerName
+            FROM OrdersPickingDetails opd WITH (NOLOCK)
+            JOIN ClientOrders co WITH (NOLOCK)
+              ON co.DocType = opd.DocTypeOri
+             AND co.OrderID = opd.OrderIDOri
+            LEFT JOIN BusinessPartners bp WITH (NOLOCK)
+              ON bp.PartnerType = 'C'
+             AND bp.PartnerID = co.ClientID
+            WHERE ISNULL(opd.deleted, 0) = 0
+            GROUP BY opd.OrderID
+        ),
+        BoxAgg AS (
+            SELECT
+                opd.OrderID,
+                COUNT(DISTINCT CONCAT(ISNULL(CONVERT(varchar(50), vm.VolDocCod), ''), '|', ISNULL(CONVERT(varchar(50), vm.VolNum), ''))) AS TotalBoxes
+            FROM OrdersPickingDetails opd WITH (NOLOCK)
+            JOIN VolMaster vm WITH (NOLOCK)
+              ON vm.ParentDocType = opd.DocTypeOri
+             AND vm.ParentOrderID = opd.OrderIDOri
+            WHERE ISNULL(opd.deleted, 0) = 0
+            GROUP BY opd.OrderID
+        ),
+        PklAgg AS (
+            SELECT
+                co.{wave_column} AS WaveID,
+                MAX(co.OrderID) AS PKLOrderID
+            FROM ClientOrders co WITH (NOLOCK)
+            WHERE co.DocType = 'PKL'
+            GROUP BY co.{wave_column}
+        )
+        SELECT
+            op.ID AS OrderPickingID,
+            op.OrderPickingGroup AS WaveID,
+            op.Date AS CreationDate,
+            op.DueDate AS RequestedExecutionDate,
+            op.AssignedUser,
+            op.UrgencyStatusID,
+            ISNULL(op.ProductionStatus, '') AS ProductionStatus,
+            ISNULL(op.deleted, 0) AS Deleted,
+            ca.CustomerID,
+            ca.CustomerName,
+            ISNULL(da.TotalLines, 0) AS TotalLines,
+            ISNULL(ba.TotalBoxes, 0) AS TotalBoxes,
+            ISNULL(da.TotalQuantityToPick, 0) AS TotalQuantityToPick,
+            ISNULL(da.TotalQuantityPicked, 0) AS TotalQuantityPicked,
+            CASE WHEN ra.OrderPickingID IS NULL THEN 0 ELSE 1 END AS HasResume,
+            ra.TotalRows,
+            ra.CompletedRows,
+            pa.PKLOrderID
+        FROM OrdersPicking op WITH (NOLOCK)
+        LEFT JOIN DetailAgg da
+          ON da.OrderID = op.ID
+        LEFT JOIN ResumeAgg ra
+          ON ra.OrderPickingID = op.ID
+        LEFT JOIN ClientAgg ca
+          ON ca.OrderID = op.ID
+        LEFT JOIN BoxAgg ba
+          ON ba.OrderID = op.ID
+        LEFT JOIN PklAgg pa
+          ON pa.WaveID = op.OrderPickingGroup
+        WHERE op.ID = ?
+    """
+    with db_cursor() as (cursor, _conn):
+        cursor.execute(query, (order_picking_id,))
+        row = cursor.fetchone()
+        return None if row is None else _row_to_dict(cursor, row)
+
+
+def _build_separation_order_summary(row: dict[str, Any]) -> dict[str, Any]:
+    deleted = _to_int(row.get("Deleted"))
+    production_status = str(row.get("ProductionStatus") or "").strip()
+    has_resume = _to_int(row.get("HasResume"))
+    total_rows = _to_int(row.get("TotalRows") or row.get("TotalLines"))
+    completed_rows = _to_int(row.get("CompletedRows"))
+    total_qty = _to_float(row.get("TotalQuantityToPick"))
+    picked_qty = _to_float(row.get("TotalQuantityPicked"))
+    state = _separation_order_state(
+        deleted=deleted,
+        production_status=production_status,
+        has_resume=has_resume,
+        total_rows=total_rows,
+        completed_rows=completed_rows,
+    )
+    progress_percentage = _progress_percentage(
+        total_rows=total_rows,
+        completed_rows=completed_rows,
+        total_qty=total_qty,
+        picked_qty=picked_qty,
+        state_code=state["code"],
+    )
+
+    return {
+        "OrderPickingID": _to_int(row.get("OrderPickingID")),
+        "WaveID": row.get("WaveID"),
+        "StateCode": state["code"],
+        "StateSymbol": state["symbol"],
+        "StateLabel": state["label"],
+        "CreationDate": _iso_value(row.get("CreationDate")),
+        "RequestedExecutionDate": _iso_value(row.get("RequestedExecutionDate")),
+        "CustomerID": row.get("CustomerID"),
+        "CustomerName": row.get("CustomerName"),
+        "AssignedUser": row.get("AssignedUser"),
+        "UrgencyStatusID": row.get("UrgencyStatusID"),
+        "ProductionStatus": production_status or None,
+        "TotalLines": _to_int(row.get("TotalLines")),
+        "TotalBoxes": _to_int(row.get("TotalBoxes")),
+        "TotalQuantityToPick": total_qty,
+        "TotalQuantityPicked": picked_qty,
+        "CompletedRows": completed_rows,
+        "ProgressPercentage": progress_percentage,
+    }
+
+
+def _fetch_separation_order_boxes(order_picking_id: int, box_kind: str) -> list[dict[str, Any]]:
+    if box_kind == "planned":
+        query = """
+            SELECT DISTINCT
+                opd.DocTypeOri AS SourceDocType,
+                opd.OrderIDOri AS SourceOrderID,
+                opd.OrderRowOri AS SourceOrderRow,
+                vm.VolDocCod,
+                vm.VolNum,
+                vm.VolTypeID,
+                vm.CreationUser AS UserID,
+                vi.ItemID,
+                ISNULL(vi.ItemQtyIni, vi.ItemQty) AS Quantity
+            FROM OrdersPickingDetails opd WITH (NOLOCK)
+            JOIN VolMaster vm WITH (NOLOCK)
+              ON vm.ParentDocType = opd.DocTypeOri
+             AND vm.ParentOrderID = opd.OrderIDOri
+            LEFT JOIN VolItem vi WITH (NOLOCK)
+              ON vi.VolDocCod = vm.VolDocCod
+             AND vi.VolNum = vm.VolNum
+             AND vi.ParentOrderRow = opd.OrderRowOri
+             AND vi.ItemID = opd.ItemID
+            WHERE opd.OrderID = ?
+              AND ISNULL(opd.deleted, 0) = 0
+            ORDER BY opd.OrderIDOri, opd.OrderRowOri, vm.VolNum
+        """
+        params = (order_picking_id,)
+    else:
+        query = """
+            ;WITH TargetMap AS (
+                SELECT DISTINCT
+                    codo.DocTypeOri AS SourceDocType,
+                    codo.OrderIDOri AS SourceOrderID,
+                    codo.OrderRowOri AS SourceOrderRow,
+                    cod.DocType AS TargetDocType,
+                    cod.OrderID AS TargetOrderID,
+                    cod.OrderRow AS TargetOrderRow
+                FROM OrdersPickingDetails opd WITH (NOLOCK)
+                JOIN ClientOrderDetailsOri codo WITH (NOLOCK)
+                  ON codo.DocTypeOri = opd.DocTypeOri
+                 AND codo.OrderIDOri = opd.OrderIDOri
+                 AND codo.OrderRowOri = opd.OrderRowOri
+                JOIN ClientOrderDetails cod WITH (NOLOCK)
+                  ON cod.DocType = codo.DocType
+                 AND cod.OrderID = codo.OrderID
+                 AND cod.OrderRow = codo.OrderRow
+                WHERE opd.OrderID = ?
+                  AND ISNULL(opd.deleted, 0) = 0
+                  AND cod.DocType <> opd.DocTypeOri
+            )
+            SELECT DISTINCT
+                map.SourceDocType,
+                map.SourceOrderID,
+                map.SourceOrderRow,
+                vm.VolDocCod,
+                vm.VolNum,
+                vm.VolTypeID,
+                vm.CreationUser AS UserID,
+                vi.ItemID,
+                ISNULL(vi.ItemQtyIni, vi.ItemQty) AS Quantity
+            FROM TargetMap map
+            JOIN VolMaster vm WITH (NOLOCK)
+              ON vm.ParentDocType = map.TargetDocType
+             AND vm.ParentOrderID = map.TargetOrderID
+            LEFT JOIN VolItem vi WITH (NOLOCK)
+              ON vi.VolDocCod = vm.VolDocCod
+             AND vi.VolNum = vm.VolNum
+             AND vi.ParentOrderRow = map.TargetOrderRow
+            ORDER BY map.SourceOrderID, map.SourceOrderRow, vm.VolNum
+        """
+        params = (order_picking_id,)
+
+    with db_cursor() as (cursor, _conn):
+        cursor.execute(query, params)
+        rows = [_row_to_dict(cursor, row) for row in cursor.fetchall()]
+
+    return [
+        {
+            "BoxKind": box_kind,
+            "SourceDocType": row.get("SourceDocType"),
+            "SourceOrderID": _nullable_int(row.get("SourceOrderID")),
+            "SourceOrderRow": _nullable_int(row.get("SourceOrderRow")),
+            "VolDocCod": row.get("VolDocCod"),
+            "VolNum": None if row.get("VolNum") is None else str(row.get("VolNum")),
+            "VolTypeID": row.get("VolTypeID"),
+            "UserID": row.get("UserID"),
+            "ItemID": row.get("ItemID"),
+            "Quantity": _to_float(row.get("Quantity")),
+        }
+        for row in rows
+    ]
+
+
+def _order_picking_exists(cursor, order_picking_id: int) -> bool:
+    cursor.execute("SELECT 1 FROM OrdersPicking WITH (NOLOCK) WHERE ID = ?", (order_picking_id,))
+    return cursor.fetchone() is not None
+
+
+def _validate_user_exists(cursor, user_id: str) -> None:
+    cursor.execute(
+        """
+        SELECT COLUMN_NAME
+        FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_NAME = 'Users'
+        """
+    )
+    columns = {str(row[0]).lower(): str(row[0]) for row in cursor.fetchall()}
+    user_id_column = None
+    for candidate in ("userid", "userid", "usrid", "user", "login", "code"):
+        if candidate in columns:
+            user_id_column = columns[candidate]
+            break
+    if not user_id_column:
+        raise ValueError("Could not resolve the user id column in Users")
+
+    cursor.execute(f"SELECT 1 FROM [Users] WITH (NOLOCK) WHERE [{user_id_column}] = ?", (user_id,))
+    if cursor.fetchone() is None:
+        raise ValueError(f"User '{user_id}' was not found in Users")
+
+
+def _validate_urgency_status_exists(cursor, urgency_status_id: str) -> None:
+    columns = _table_columns(cursor, "UrgencyStatus", {})
+    if not columns:
+        raise ValueError("UrgencyStatus table was not found")
+
+    id_column = columns.get("urgencystatusid") or columns.get("id") or columns.get("code")
+    if not id_column:
+        raise ValueError("Could not resolve the UrgencyStatus identifier column")
+
+    cursor.execute(
+        f"SELECT 1 FROM UrgencyStatus WITH (NOLOCK) WHERE {id_column} = ?",
+        (urgency_status_id,),
+    )
+    if cursor.fetchone() is None:
+        raise ValueError(f"UrgencyStatus '{urgency_status_id}' was not found")
+
+
+def _fetch_origin_rows(cursor, order_picking_id: int) -> list[tuple[str, int, int]]:
+    cursor.execute(
+        """
+        SELECT DISTINCT
+            opd.DocTypeOri,
+            opd.OrderIDOri,
+            opd.OrderRowOri
+        FROM OrdersPickingDetails opd WITH (NOLOCK)
+        WHERE opd.OrderID = ?
+          AND ISNULL(opd.deleted, 0) = 0
+        """,
+        (order_picking_id,),
+    )
+    return [
+        (str(row[0]), int(row[1]), int(row[2]))
+        for row in cursor.fetchall()
+        if row[0] is not None and row[1] is not None and row[2] is not None
+    ]
+
+
+def _fetch_wave_id(cursor, order_picking_id: int) -> str | None:
+    cursor.execute(
+        "SELECT OrderPickingGroup FROM OrdersPicking WITH (NOLOCK) WHERE ID = ?",
+        (order_picking_id,),
+    )
+    row = cursor.fetchone()
+    return None if row is None or row[0] is None else str(row[0]).strip()
+
+
+def _fetch_wave_id_from_no_lock(order_picking_id: int) -> str:
+    with db_cursor() as (cursor, _conn):
+        wave_id = _fetch_wave_id(cursor, order_picking_id)
+    if not wave_id:
+        raise ValueError(f"OrdersPicking ID {order_picking_id} was not found")
+    return wave_id
+
+
+def _fetch_pkl_order_id_by_wave(cursor, cache: dict[str, dict[str, str]], wave_id: str) -> int | None:
+    wave_column = _client_orders_wave_column(cursor, cache)
+    cursor.execute(
+        f"""
+        SELECT TOP (1) OrderID
+        FROM ClientOrders WITH (NOLOCK)
+        WHERE DocType = 'PKL'
+          AND {wave_column} = ?
+        ORDER BY OrderID DESC
+        """,
+        (wave_id,),
+    )
+    row = cursor.fetchone()
+    return None if row is None or row[0] is None else int(row[0])
+
+
+def _fetch_separation_order_context(order_picking_id: int) -> dict[str, Any]:
+    with db_cursor() as (cursor, _conn):
+        wave_id = _fetch_wave_id(cursor, order_picking_id)
+        related_documents = _fetch_related_target_documents(cursor, order_picking_id, include_pkl=True)
+    return _resolve_separation_order_context_from_docs(
+        order_picking_id=order_picking_id,
+        wave_id=wave_id,
+        related_documents=related_documents,
+    )
+
+
+def _fetch_related_target_documents(
+    cursor,
+    order_picking_id: int,
+    include_pkl: bool,
+) -> list[dict[str, Any]]:
+    cursor.execute(
+        """
+        SELECT DISTINCT
+            cod.DocType AS TargetDocType,
+            cod.OrderID AS TargetOrderID
+        FROM OrdersPickingDetails opd WITH (NOLOCK)
+        JOIN ClientOrderDetailsOri codo WITH (NOLOCK)
+          ON codo.DocTypeOri = opd.DocTypeOri
+         AND codo.OrderIDOri = opd.OrderIDOri
+         AND codo.OrderRowOri = opd.OrderRowOri
+        JOIN ClientOrderDetails cod WITH (NOLOCK)
+          ON cod.DocType = codo.DocType
+         AND cod.OrderID = codo.OrderID
+         AND cod.OrderRow = codo.OrderRow
+        WHERE opd.OrderID = ?
+          AND ISNULL(opd.deleted, 0) = 0
+          AND cod.DocType <> opd.DocTypeOri
+        ORDER BY cod.DocType, cod.OrderID
+        """,
+        (order_picking_id,),
+    )
+    documents = [
+        {
+            "doc_type": str(row[0] or "").strip(),
+            "order_id": int(row[1] or 0),
+        }
+        for row in cursor.fetchall()
+        if row[0] is not None and row[1] is not None
+    ]
+    if include_pkl:
+        return documents
+    return [document for document in documents if document["doc_type"].upper() != "PKL"]
+
+
+def _resolve_separation_order_context_from_docs(
+    order_picking_id: int,
+    wave_id: str | None,
+    related_documents: list[dict[str, Any]],
+) -> dict[str, Any]:
+    non_pkl_docs = [doc for doc in related_documents if doc["doc_type"].upper() != "PKL"]
+    if non_pkl_docs:
+        primary_doc = non_pkl_docs[0]
+        return {
+            "Source": "MANUAL_SSCP",
+            "SourceLabel": "Manual SEP/SSCP",
+            "RelatedDocType": primary_doc["doc_type"],
+            "RelatedOrderID": primary_doc["order_id"],
+        }
+    if wave_id:
+        pkl_doc = next((doc for doc in related_documents if doc["doc_type"].upper() == "PKL"), None)
+        return {
+            "Source": "BY_PTL",
+            "SourceLabel": "Integracao BY-PTL",
+            "RelatedDocType": pkl_doc["doc_type"] if pkl_doc else None,
+            "RelatedOrderID": pkl_doc["order_id"] if pkl_doc else None,
+        }
+    return {
+        "Source": "UNKNOWN",
+        "SourceLabel": "Origem desconhecida",
+        "RelatedDocType": None,
+        "RelatedOrderID": None,
+    }
+
+
+def _release_related_boxes(
+    cursor,
+    cache: dict[str, dict[str, str]],
+    origin_rows: list[tuple[str, int, int]],
+    pkl_order_id: int | None,
+    related_documents: list[dict[str, Any]],
+) -> int:
+    vol_master_columns = _table_columns(cursor, "VolMaster", cache)
+    if not vol_master_columns:
+        return 0
+
+    set_parts: list[str] = []
+    params: list[Any] = []
+    for candidate, value in (
+        ("PendingOrderPickingID", ""),
+        ("OrderPickingID", 0),
+        ("ActivePickingID", 0),
+        ("Blocked", 0),
+        ("Reserved", 0),
+    ):
+        normalized = candidate.lower()
+        if normalized in vol_master_columns:
+            set_parts.append(f"{vol_master_columns[normalized]} = ?")
+            params.append(value)
+
+    if not set_parts:
+        return 0
+
+    released = 0
+    for doc_type, order_id, _order_row in origin_rows:
+        local_params = list(params)
+        local_params.extend([doc_type, order_id])
+        cursor.execute(
+            f"""
+            UPDATE VolMaster
+            SET {', '.join(set_parts)}
+            WHERE ParentDocType = ?
+              AND ParentOrderID = ?
+            """,
+            tuple(local_params),
+        )
+        released += max(cursor.rowcount or 0, 0)
+
+    has_related_pkl = any(document["doc_type"].upper() == "PKL" for document in related_documents)
+    if pkl_order_id is not None and not has_related_pkl:
+        local_params = list(params)
+        local_params.extend(["PKL", pkl_order_id])
+        cursor.execute(
+            f"""
+            UPDATE VolMaster
+            SET {', '.join(set_parts)}
+            WHERE ParentDocType = ?
+              AND ParentOrderID = ?
+            """,
+            tuple(local_params),
+        )
+        released += max(cursor.rowcount or 0, 0)
+
+    for document in related_documents:
+        local_params = list(params)
+        local_params.extend([document["doc_type"], document["order_id"]])
+        cursor.execute(
+            f"""
+            UPDATE VolMaster
+            SET {', '.join(set_parts)}
+            WHERE ParentDocType = ?
+              AND ParentOrderID = ?
+            """,
+            tuple(local_params),
+        )
+        released += max(cursor.rowcount or 0, 0)
+
+    return released
+
+
+def _release_origin_documents(
+    cursor,
+    cache: dict[str, dict[str, str]],
+    origin_rows: list[tuple[str, int, int]],
+) -> int:
+    header_columns = _table_columns(cursor, "ClientOrders", cache)
+    detail_columns = _table_columns(cursor, "ClientOrderDetails", cache)
+    released: set[tuple[str, int]] = set()
+
+    for doc_type, order_id, order_row in origin_rows:
+        if detail_columns:
+            detail_set_parts: list[str] = []
+            detail_params: list[Any] = []
+            for candidate, value in (
+                ("ActivePickingID", 0),
+                ("PendingOrderPickingID", 0),
+                ("ProductionStatus", "INICIAL"),
+            ):
+                normalized = candidate.lower()
+                if normalized in detail_columns:
+                    detail_set_parts.append(f"{detail_columns[normalized]} = ?")
+                    detail_params.append(value)
+            if detail_set_parts:
+                detail_params.extend([doc_type, order_id, order_row])
+                cursor.execute(
+                    f"""
+                    UPDATE ClientOrderDetails
+                    SET {', '.join(detail_set_parts)}
+                    WHERE DocType = ?
+                      AND OrderID = ?
+                      AND OrderRow = ?
+                    """,
+                    tuple(detail_params),
+                )
+
+        if (doc_type, order_id) not in released and header_columns:
+            header_set_parts: list[str] = []
+            header_params: list[Any] = []
+            for candidate, value in (
+                ("PendingOrderPickingID", ""),
+                ("ProductionStatus", "INICIAL"),
+            ):
+                normalized = candidate.lower()
+                if normalized in header_columns:
+                    header_set_parts.append(f"{header_columns[normalized]} = ?")
+                    header_params.append(value)
+            if header_set_parts:
+                header_params.extend([doc_type, order_id])
+                cursor.execute(
+                    f"""
+                    UPDATE ClientOrders
+                    SET {', '.join(header_set_parts)}
+                    WHERE DocType = ?
+                      AND OrderID = ?
+                    """,
+                    tuple(header_params),
+                )
+            released.add((doc_type, order_id))
+
+    return len(released)
+
+
+def _cancel_related_documents(
+    cursor,
+    cache: dict[str, dict[str, str]],
+    related_documents: list[dict[str, Any]],
+    actor: str,
+    now: datetime,
+) -> tuple[int, int]:
+    if not related_documents:
+        return 0, 0
+
+    header_columns = _table_columns(cursor, "ClientOrders", cache)
+    detail_columns = _table_columns(cursor, "ClientOrderDetails", cache)
+    cancelled_pkl_documents = 0
+    cancelled_related_documents = 0
+
+    for document in related_documents:
+        doc_type = document["doc_type"]
+        order_id = document["order_id"]
+
+        header_set_parts: list[str] = []
+        header_params: list[Any] = []
+        for candidate, value in (
+            ("ProductionStatus", "ANULADO"),
+            ("ModifDateTime", now),
+            ("ModifUser", actor),
+        ):
+            normalized = candidate.lower()
+            if normalized in header_columns:
+                header_set_parts.append(f"{header_columns[normalized]} = ?")
+                header_params.append(value)
+        if header_set_parts:
+            header_params.extend([doc_type, order_id])
+            cursor.execute(
+                f"""
+                UPDATE ClientOrders
+                SET {', '.join(header_set_parts)}
+                WHERE DocType = ?
+                  AND OrderID = ?
+                """,
+                tuple(header_params),
+            )
+
+        detail_set_parts: list[str] = []
+        detail_params: list[Any] = []
+        if "productionstatus" in detail_columns:
+            detail_set_parts.append(f"{detail_columns['productionstatus']} = ?")
+            detail_params.append("ANULADO")
+        if detail_set_parts:
+            detail_params.extend([doc_type, order_id])
+            cursor.execute(
+                f"""
+                UPDATE ClientOrderDetails
+                SET {', '.join(detail_set_parts)}
+                WHERE DocType = ?
+                  AND OrderID = ?
+                """,
+                tuple(detail_params),
+            )
+
+        if doc_type.upper() == "PKL":
+            cancelled_pkl_documents += 1
+        else:
+            cancelled_related_documents += 1
+
+    return cancelled_pkl_documents, cancelled_related_documents
+
+
+def _mark_orders_picking_cancelled(
+    cursor,
+    cache: dict[str, dict[str, str]],
+    order_picking_id: int,
+    actor: str,
+    reason: str | None,
+    now: datetime,
+) -> None:
+    columns = _table_columns(cursor, "OrdersPicking", cache)
+    set_parts: list[str] = []
+    params: list[Any] = []
+    for candidate, value in (
+        ("ProductionStatus", "ANULADO"),
+        ("deleted", 1),
+        ("deleted_by", actor),
+        ("deleted_date", now),
+        ("edited_by", actor),
+        ("edited_date", now),
+    ):
+        normalized = candidate.lower()
+        if normalized in columns:
+            set_parts.append(f"{columns[normalized]} = ?")
+            params.append(value)
+    if reason and "obs" in columns:
+        set_parts.append(f"{columns['obs']} = ?")
+        params.append(reason)
+    params.append(order_picking_id)
+    cursor.execute(
+        f"""
+        UPDATE OrdersPicking
+        SET {', '.join(set_parts)}
+        WHERE ID = ?
+        """,
+        tuple(params),
+    )
+
+
+def _mark_orders_picking_details_cancelled(
+    cursor,
+    cache: dict[str, dict[str, str]],
+    order_picking_id: int,
+    now: datetime,
+) -> None:
+    columns = _table_columns(cursor, "OrdersPickingDetails", cache)
+    set_parts: list[str] = []
+    params: list[Any] = []
+    for candidate, value in (
+        ("deleted", 1),
+        ("PickingCompleted", 0),
+        ("PickingCompletedDate", None),
+    ):
+        normalized = candidate.lower()
+        if normalized in columns:
+            set_parts.append(f"{columns[normalized]} = ?")
+            params.append(value)
+    if "edited_date" in columns:
+        set_parts.append(f"{columns['edited_date']} = ?")
+        params.append(now)
+    if set_parts:
+        params.append(order_picking_id)
+        cursor.execute(
+            f"""
+            UPDATE OrdersPickingDetails
+            SET {', '.join(set_parts)}
+            WHERE OrderID = ?
+            """,
+            tuple(params),
+        )
+
+
+def _fetch_users_metadata(cursor) -> list[dict[str, str]]:
+    cursor.execute(
+        """
+        SELECT COLUMN_NAME
+        FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_NAME = 'Users'
+        """
+    )
+    columns = {str(row[0]).lower(): str(row[0]) for row in cursor.fetchall()}
+    if not columns:
+        return []
+
+    id_column = None
+    for candidate in ("userid", "usrid", "user", "login", "code"):
+        if candidate in columns:
+            id_column = columns[candidate]
+            break
+    name_column = columns.get("username") or columns.get("name") or id_column
+    active_column = columns.get("active")
+    if not id_column or not name_column:
+        return []
+
+    where_clause = ""
+    if active_column:
+        where_clause = f"WHERE [{active_column}] = 1"
+    cursor.execute(
+        f"""
+        SELECT [{id_column}] AS Value, [{name_column}] AS Label
+        FROM [Users] WITH (NOLOCK)
+        {where_clause}
+        ORDER BY [{name_column}]
+        """
+    )
+    return [
+        {"Value": str(row[0]).strip(), "Label": str((row[1] or row[0])).strip()}
+        for row in cursor.fetchall()
+        if row[0] is not None
+    ]
+
+
+def _fetch_urgency_status_metadata(cursor) -> list[dict[str, str]]:
+    columns = _table_columns(cursor, "UrgencyStatus", {})
+    if not columns:
+        return []
+
+    id_column = columns.get("urgencystatusid") or columns.get("id") or columns.get("code")
+    label_column = (
+        columns.get("urgencystatusdesc")
+        or columns.get("description")
+        or columns.get("name")
+        or id_column
+    )
+    if not id_column or not label_column:
+        return []
+
+    cursor.execute(
+        f"""
+        SELECT {id_column} AS Value, {label_column} AS Label
+        FROM UrgencyStatus WITH (NOLOCK)
+        ORDER BY {label_column}
+        """
+    )
+    return [
+        {"Value": str(row[0]).strip(), "Label": str((row[1] or row[0])).strip()}
+        for row in cursor.fetchall()
+        if row[0] is not None
+    ]
+
+
+def _client_orders_wave_column_name() -> str:
+    with db_cursor() as (cursor, _conn):
+        return _client_orders_wave_column(cursor, {})
+
+
+def _separation_order_state(
+    deleted: int,
+    production_status: str,
+    has_resume: int,
+    total_rows: int,
+    completed_rows: int,
+) -> dict[str, str]:
+    normalized_status = production_status.strip().upper()
+    if deleted == 1 or normalized_status == "ANULADO":
+        return {"code": "cancelled", "symbol": "x", "label": "Anulado"}
+    if has_resume == 0:
+        return {"code": "initial", "symbol": ".", "label": "Inicial"}
+    if completed_rows < total_rows:
+        return {"code": "in_progress", "symbol": "~", "label": "Em curso"}
+    return {"code": "completed", "symbol": "+", "label": "Executado"}
+
+
+def _line_state(
+    deleted: int,
+    picking_completed: int,
+    quantity_to_pick: float,
+    quantity_picked: float,
+) -> dict[str, str]:
+    if deleted == 1:
+        return {"code": "cancelled", "symbol": "x", "label": "Anulado"}
+    if picking_completed == 1 or quantity_to_pick <= 0 or quantity_picked >= quantity_to_pick:
+        return {"code": "completed", "symbol": "+", "label": "Executado"}
+    if quantity_picked > 0:
+        return {"code": "in_progress", "symbol": "~", "label": "Em curso"}
+    return {"code": "initial", "symbol": ".", "label": "Inicial"}
+
+
+def _progress_percentage(
+    total_rows: int,
+    completed_rows: int,
+    total_qty: float,
+    picked_qty: float,
+    state_code: str,
+) -> float:
+    if state_code == "cancelled":
+        return 0.0
+    if total_rows > 0:
+        return round(min(max((completed_rows / total_rows) * 100, 0), 100), 2)
+    if total_qty > 0:
+        return round(min(max((picked_qty / total_qty) * 100, 0), 100), 2)
+    if state_code == "completed":
+        return 100.0
+    return 0.0
+
+
+def _row_to_dict(cursor, row) -> dict[str, Any]:
+    names = [column[0] for column in cursor.description]
+    return {name: _json_value(value) for name, value in zip(names, row)}
+
+
+def _json_value(value: Any) -> Any:
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value)
+    return value
+
+
+def _parse_optional_date(value: str | None, field_name: str) -> date | None:
+    if value is None or not str(value).strip():
+        return None
+    try:
+        return date.fromisoformat(str(value).strip())
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must be in YYYY-MM-DD format") from exc
+
+
+def _iso_value(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    return str(value)
+
+
+def _to_float(value: Any) -> float:
+    if value is None or value == "":
+        return 0.0
+    if isinstance(value, Decimal):
+        return float(value)
+    return float(value)
+
+
+def _to_int(value: Any) -> int:
+    if value is None or value == "":
+        return 0
+    if isinstance(value, bool):
+        return int(value)
+    return int(value)
+
+
+def _nullable_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    return int(value)
 
 
 def _fit_text(value: str, column: dict[str, Any]) -> str:

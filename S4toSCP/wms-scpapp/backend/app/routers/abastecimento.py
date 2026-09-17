@@ -35,6 +35,19 @@ def _safe_text(value: object) -> str:
     return str(value or "").strip()
 
 
+def _origin_balance_expr(cursor, alias: str = "cod") -> str:
+    if _has_column(cursor, "ClientOrderDetails", "QtyPend"):
+        return f"ISNULL({alias}.QtyPend, 0)"
+
+    return f"""
+        CASE
+            WHEN ISNULL({alias}.QtyOrd, 0) - ISNULL({alias}.QtySatisf, 0) > 0
+                THEN ISNULL({alias}.QtyOrd, 0) - ISNULL({alias}.QtySatisf, 0)
+            ELSE 0
+        END
+    """
+
+
 def _status_filters(cursor) -> tuple[str, str, tuple]:
     required = ["DocStatusID", "IsFinal", "IsAnulated"]
     if all(_has_column(cursor, "DocumentStatus", col) for col in required):
@@ -211,6 +224,7 @@ def list_documents(
     search: str = Query(default=""),
 ):
     with db_cursor() as (cursor, _):
+        origin_balance_expr = _origin_balance_expr(cursor)
         term = f"%{search.strip()}%"
         partner_filter = "AND co.SubContratado = ?" if partner_id else ""
         search_filter = """
@@ -235,6 +249,7 @@ def list_documents(
                     co.OrderDateTime,
                     co.OrderDatePrev,
                     ISNULL(co.ObsInternal, ISNULL(co.Obs, '')) AS Obs,
+                    SUM({origin_balance_expr}) AS TotalQty,
                     COUNT(cod.OrderRow) AS TotalLines,
                     MAX(cod.ItemID) AS ItemID
                 FROM ClientOrders co
@@ -275,6 +290,7 @@ def list_documents(
                     co.OrderDateTime,
                     co.OrderDatePrev,
                     ISNULL(co.ObsInternal, ISNULL(co.Obs, '')) AS Obs,
+                    SUM({origin_balance_expr}) AS TotalQty,
                     COUNT(cod.OrderRow) AS TotalLines,
                     MAX(cod.ItemID) AS ItemID
                 FROM ClientOrders co
@@ -320,8 +336,9 @@ def list_documents(
             "order_date": str(row[4])[:10] if row[4] else None,
             "due_date": str(row[5])[:10] if row[5] else None,
             "obs": row[6] or "",
-            "total_lines": int(row[7] or 0),
-            "item_id": row[8] or "",
+            "total_qty": float(row[7] or 0),
+            "total_lines": int(row[8] or 0),
+            "item_id": row[9] or "",
         }
         for row in rows
     ]

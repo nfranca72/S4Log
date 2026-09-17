@@ -25,8 +25,14 @@ class CSVRow(BaseModel):
     qty_box: int
     qty_total: int
     season_desc: str
-    item_id: str          # MC-style-color-size (gerado)
+    item_id: str          # MC-style-color-size (gerado) ou ItemID completo da encomenda ESCP
     exists_in_db: Optional[bool] = None
+    # True apenas quando a linha foi efetivamente ligada a um ItemID da encomenda ESCP
+    # (automaticamente ou por escolha manual do operador). Enquanto for False, o item_id
+    # gerado a partir do CSV está incompleto (falta o sufixo real, ex: -DOT, -NEG) e a
+    # linha não deve ser importada.
+    resolved: bool = False
+    candidate_item_ids: list[str] = []
 
 class CSVPreview(BaseModel):
     header: CSVHeader
@@ -38,6 +44,8 @@ class CSVPreview(BaseModel):
     existing_articles: int
     warnings: list[str] = []
     packings: Optional[list["CSVPreview"]] = None
+    requester_id_duplicate_orders: list[int] = []
+    unresolved_rows: int = 0
 
 
 # ── Artigos ────────────────────────────────────────────────────────────────────
@@ -242,3 +250,33 @@ class EscpMergeApplyRequest(BaseModel):
     order_id:       int
     rows_to_add:    list[OrderRow]
     rows_to_update: list[dict]
+
+
+# ── Importação Artigos Benfica ────────────────────────────────────────────────
+
+class BenficaItemRow(BaseModel):
+    client_ref: str
+    item_desc: str
+    barcode: str
+    price_socio: str = ""
+    price_pvp: str = ""
+    size_id: str = ""
+    item_id: str
+    exists_in_db: Optional[bool] = None
+    duplicate_in_file: bool = False
+    existing_item_id: Optional[str] = None
+
+
+class BenficaItemsPreview(BaseModel):
+    rows: list[BenficaItemRow]
+    total_lines: int
+    unique_barcodes: int
+    new_items: int
+    existing_items: int
+    duplicate_rows: int
+
+
+class BenficaItemsImportResult(BaseModel):
+    created: int
+    skipped_existing: int
+    skipped_duplicates: int

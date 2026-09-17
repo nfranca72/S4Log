@@ -26,12 +26,39 @@ async function request(path, options) {
   return res.json()
 }
 
+function buildRfidPrintMessage(result, selectedRows) {
+  const uniqueItems = [...new Set(selectedRows.map(row => row.item_id).filter(Boolean))]
+  const articleLabel = uniqueItems.length === 1 ? ` para o artigo ${uniqueItems[0]}` : ''
+  const tags = Array.isArray(result.rfid_tags) ? result.rfid_tags.filter(Boolean) : []
+  const registered = Number(result.rfid_registered || 0)
+
+  let message = `${result.labels_printed} etiqueta(s) enviadas para ${result.printer}`
+
+  if (registered > 0) {
+    message += `. Associou ${registered} EPC${registered === 1 ? '' : "'s"} à base de dados${articleLabel}`
+  }
+
+  if (tags.length === 1) {
+    message += `. EPC: ${tags[0]}`
+  } else if (tags.length > 1) {
+    message += `. EPCs: ${tags[0]} -> ${tags[tags.length - 1]}`
+  }
+
+  if (result.rfid_warning) {
+    message += `. Aviso RFID: ${result.rfid_warning}`
+  }
+
+  return message
+}
+
 export default function Labels() {
   const toast = useToast()
   const [mode, setMode] = useState('item')
   const [printConfigs, setPrintConfigs] = useState([])
   const [selectedPrint, setSelectedPrint] = useState('')
   const [printing, setPrinting] = useState(false)
+  const [previewing, setPreviewing] = useState(false)
+  const [preview, setPreview] = useState(null)
 
   const [itemSearch, setItemSearch] = useState('')
   const [items, setItems] = useState([])
@@ -48,6 +75,21 @@ export default function Labels() {
   const rows = mode === 'item' ? itemRows : docRows
   const totalLabels = useMemo(
     () => rows.reduce((sum, row) => sum + (parseInt(row.print_qty, 10) || 0), 0),
+    [rows],
+  )
+  const selectedRows = useMemo(
+    () => rows
+      .filter(row => (parseInt(row.print_qty, 10) || 0) > 0)
+      .map(row => ({
+        item_id: row.item_id,
+        item_desc: row.item_desc || '',
+        color_id: row.color_id || '',
+        grid_id: row.grid_id || '',
+        size_id: row.size_id || '',
+        order_num: row.order_num || 0,
+        order_row: row.order_row || null,
+        print_qty: parseInt(row.print_qty, 10) || 0,
+      })),
     [rows],
   )
 
@@ -137,25 +179,44 @@ export default function Labels() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           config_file: selectedPrint,
-          lines: rows
-            .filter(row => (parseInt(row.print_qty, 10) || 0) > 0)
-            .map(row => ({
-              item_id: row.item_id,
-              item_desc: row.item_desc || '',
-              color_id: row.color_id || '',
-              grid_id: row.grid_id || '',
-              size_id: row.size_id || '',
-              order_num: row.order_num || 0,
-              order_row: row.order_row || null,
-              print_qty: parseInt(row.print_qty, 10) || 0,
-            })),
+          lines: selectedRows,
         }),
       })
-      toast(`${result.labels_printed} etiqueta(s) enviadas para ${result.printer}`, 'success')
+      toast(buildRfidPrintMessage(result, selectedRows), 'success')
     } catch (e) {
       toast(e.message, 'error')
     } finally {
       setPrinting(false)
+    }
+  }
+
+  const openPreview = async () => {
+    if (previewing) return
+
+    if (!selectedPrint) {
+      toast('Seleciona a etiqueta a visualizar', 'error')
+      return
+    }
+    if (totalLabels <= 0) {
+      toast('Indica pelo menos uma quantidade de etiquetas', 'error')
+      return
+    }
+
+    try {
+      setPreviewing(true)
+      const result = await request('/labels/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          config_file: selectedPrint,
+          lines: selectedRows,
+        }),
+      })
+      setPreview(result)
+    } catch (e) {
+      toast(e.message, 'error')
+    } finally {
+      setPreviewing(false)
     }
   }
 
@@ -293,9 +354,56 @@ export default function Labels() {
             Total preparado: {totalLabels} etiqueta(s)
           </div>
           <div className={styles.actions}>
+            <Btn variant="outline" onClick={openPreview} loading={previewing}>
+              {previewing ? 'A gerar preview...' : 'Pré-visualizar'}
+            </Btn>
             <Btn variant="success" onClick={preparePrint}>{printing ? 'A imprimir...' : 'Imprimir'}</Btn>
           </div>
         </Card>
+      )}
+
+      {preview && (
+        <div className={styles.modalOverlay}>
+          <div className={styles.modal}>
+            <div className={styles.modalHeader}>
+              <div>
+                <h2 className={styles.modalTitle}>Pré-visualização da etiqueta</h2>
+                <p className={styles.modalDesc}>
+                  Template {preview.config_file} com {preview.label_count} etiqueta(s) preparadas.
+                </p>
+                {preview.preview_note && <p className={styles.modalMeta}>{preview.preview_note}</p>}
+              </div>
+              <button type="button" className={styles.modalClose} onClick={() => setPreview(null)}>×</button>
+            </div>
+
+            <div className={styles.previewBody}>
+              <div className={styles.previewCanvas}>
+                <div
+                  className={styles.previewSvg}
+                  dangerouslySetInnerHTML={{ __html: preview.preview_svg }}
+                />
+              </div>
+              <div className={styles.previewInfo}>
+                <div className={styles.previewInfoTitle}>Dados renderizados</div>
+                <div className={styles.previewInfoText}>
+                  A imagem é gerada com os mesmos dados usados na impressão real.
+                </div>
+                <div className={styles.zplTitle}>ZPL gerado</div>
+                <pre className={styles.zplBlock}>{preview.rendered_zpl}</pre>
+              </div>
+            </div>
+
+            <div className={styles.modalFooter}>
+              <span className={styles.modalMeta}>{preview.label_count} etiqueta(s) prontas</span>
+              <div className={styles.actions}>
+                <Btn variant="outline" onClick={() => setPreview(null)}>Fechar</Btn>
+                <Btn variant="success" onClick={preparePrint} loading={printing}>
+                  {printing ? 'A imprimir...' : 'Imprimir'}
+                </Btn>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

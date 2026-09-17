@@ -55,7 +55,15 @@ def resolve_item_ids(order_id: int, csv_rows: list) -> tuple[list, list[str]]:
     errors  = []
     updated = []
 
+    from app.models.schemas import CSVRow
+
     for row in csv_rows:
+        # Linha já resolvida (match automático anterior ou completada manualmente
+        # pelo operador) — não reprocessa, preserva a escolha feita.
+        if row.resolved:
+            updated.append(row)
+            continue
+
         prefix    = f"MESCP{row.style_code}-{row.color_code}-{row.size}"
         ref       = str(row.season_desc).strip()
         ref_norm  = _normalize(ref)
@@ -100,16 +108,27 @@ def resolve_item_ids(order_id: int, csv_rows: list) -> tuple[list, list[str]]:
                 f"Sem match: prefix='{prefix}' ref='{ref}' norm='{ref_norm}' "
                 f"candidates={candidates[:3]}"
             )
+            # Não foi possível ligar a linha à encomenda ESCP de origem — o código
+            # gerado a partir do CSV (style+cor+tam) fica incompleto porque falta o
+            # sufixo real do artigo (ex: -DOT, -NEG), que só existe na encomenda.
+            # A linha fica marcada como não resolvida: o operador tem de completar
+            # manualmente (escolhendo um candidato ou indicando o código correto)
+            # antes de poder ser importada — caso contrário é excluída da importação.
             errors.append(
                 f"Artigo não encontrado na encomenda: "
                 f"style={row.style_code}, color={row.color_code}, "
                 f"size={row.size}, PO='{ref}'"
+                + (f" — candidatos com a mesma referência: {', '.join(sorted(set(candidates))[:5])}" if candidates else "")
             )
-            updated.append(row)
+            row_dict = row.dict()
+            row_dict['resolved'] = False
+            row_dict['candidate_item_ids'] = sorted(set(candidates))[:10]
+            updated.append(CSVRow(**row_dict))
         else:
             row_dict = row.dict()
             row_dict['item_id'] = match
-            from app.models.schemas import CSVRow
+            row_dict['resolved'] = True
+            row_dict['candidate_item_ids'] = []
             updated.append(CSVRow(**row_dict))
 
     return updated, errors
